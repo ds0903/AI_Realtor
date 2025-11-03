@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+aiogram
+anthropic
+psycopg2-binary
+sqlalchemy
+python-dotenv
+gspread
+oauth2client
+httpx
+asyncpg
+pyyaml
+dotenv
