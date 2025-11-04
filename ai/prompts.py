@@ -28,7 +28,7 @@ class PromptsLoader:
         except yaml.YAMLError as e:
             raise ValueError(f"Помилка парсингу YAML файлу: {e}")
     
-    def get_system_prompt(self, welcome_messages, questions, objections, reactions):
+    def get_system_prompt(self, welcome_messages, questions, objections, reactions, jokes=None, district_synonyms=None):
         """
         Генерує системний промпт для Claude агента
         
@@ -37,6 +37,8 @@ class PromptsLoader:
             questions: список питань (6 шт)
             objections: список відповідей на заперечення
             reactions: список реакцій на відповіді
+            jokes: список жартів
+            district_synonyms: словник синонімів районів
         
         Returns:
             str: системний промпт
@@ -47,6 +49,17 @@ class PromptsLoader:
         objections_str = ', '.join(objections[:3])
         reactions_str = ', '.join(reactions[:3])
         
+        # Форматуємо жарти
+        jokes = jokes or []
+        jokes_str = '\n'.join(f'- {joke}' for joke in jokes) if jokes else "Немає жартів"
+        
+        # Форматуємо синоніми районів
+        district_synonyms = district_synonyms or {}
+        if district_synonyms:
+            synonyms_str = '\n'.join(f'- "{syn}" = {official}' for syn, official in district_synonyms.items())
+        else:
+            synonyms_str = "Немає синонімів"
+        
         # Отримуємо шаблон промпта з YAML
         template = self.prompts['system']['main_prompt']
         
@@ -55,7 +68,9 @@ class PromptsLoader:
             welcome_messages=welcome_str,
             questions=questions_str,
             objections=objections_str,
-            reactions=reactions_str
+            reactions=reactions_str,
+            jokes=jokes_str,
+            district_synonyms=synonyms_str
         )
     
     def get_context_prompt(self, conversation_history, filters, questions_asked):
@@ -100,9 +115,9 @@ class PromptsLoader:
 prompts_loader = PromptsLoader()
 
 # Функції для зворотної сумісності
-def get_system_prompt(welcome_messages, questions, objections, reactions):
+def get_system_prompt(welcome_messages, questions, objections, reactions, jokes=None, district_synonyms=None):
     """Отримує системний промпт"""
-    return prompts_loader.get_system_prompt(welcome_messages, questions, objections, reactions)
+    return prompts_loader.get_system_prompt(welcome_messages, questions, objections, reactions, jokes, district_synonyms)
 
 def get_context_prompt(conversation_history, filters, questions_asked):
     """Отримує контекст промпт"""

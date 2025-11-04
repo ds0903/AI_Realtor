@@ -20,8 +20,10 @@ class ClaudeAgent:
         questions = sheets_service.get_questions()
         objections = sheets_service.get_objections()
         reactions = sheets_service.get_reactions()
+        jokes = sheets_service.get_jokes()
+        district_synonyms = sheets_service.get_district_synonyms()
         
-        return get_system_prompt(welcome, questions, objections, reactions)
+        return get_system_prompt(welcome, questions, objections, reactions, jokes, district_synonyms)
 
     async def _get_conversation_from_db(self, user_id):
         """Отримує конверсацію з БД"""
@@ -31,9 +33,57 @@ class ClaudeAgent:
             )
             return result.scalar_one_or_none()
     
+    def _analyze_filters(self, filters):
+        """
+        Аналізує фільтри і визначає які питання вже покриті
+        1 = ім'я
+        2 = тип (квартира/будинок)
+        3 = район
+        4 = кімнатність
+        5 = ремонт
+        6 = бюджет
+        """
+        covered = []
+        
+        # Перевіряємо кожен фільтр і записуємо як покрите питання
+        if filters.get("name"):
+            covered.append(1)
+        
+        if filters.get("type"):
+            covered.append(2)
+        
+        if filters.get("district"):
+            covered.append(3)
+        
+        if filters.get("rooms"):
+            covered.append(4)
+        
+        if filters.get("state") or filters.get("renovation"):
+            covered.append(5)
+        
+        if filters.get("budget") or filters.get("price_min") or filters.get("price_max"):
+            covered.append(6)
+        
+        return sorted(covered)
+    
+    def _normalize_district(self, district_name, synonyms):
+        """Нормалізує назву району з використанням синонімів"""
+        if not district_name or not synonyms:
+            return district_name
+        
+        # Перевіряємо чи є синонім
+        district_lower = district_name.lower().strip()
+        if district_lower in synonyms:
+            return synonyms[district_lower]
+        
+        return district_name
+    
     async def process_message(self, user_id, user_message):
         """Обробляє повідомлення користувача через Claude AI"""
         conversation_record = await self._get_conversation_from_db(user_id)
+        
+        # Отримуємо синоніми районів
+        district_synonyms = sheets_service.get_district_synonyms()
         
         if not conversation_record:
             messages_history = []
@@ -42,7 +92,30 @@ class ClaudeAgent:
         else:
             messages_history = conversation_record.messages or []
             filters = conversation_record.filters or {}
-            questions_asked = []
+            # Аналізуємо які питання вже покриті на основі фільтрів
+            questions_asked = self._analyze_filters(filters)
+        
+        # Якщо це перше повідомлення (/start), задаємо всі питання одразу
+        if user_message == "/start":
+            welcome = sheets_service.get_welcome_messages()
+            questions = sheets_service.get_questions()
+            
+            # Формуємо привітання з всіма питаннями
+            welcome_message = welcome[0] if welcome else "Привіт! Я - ШІ Ріелтор."
+            
+            response_text = f"{welcome_message}\n\nЩоб підібрати ідеальний варіант, дайте відповіді на кілька питань:\n\n"
+            
+            for i, question in enumerate(questions[:6], 1):
+                response_text += f"{i}. {question}\n"
+            
+            response_text += "\nМожете відповісти все одразу або окремо - як вам зручніше! 😊"
+            
+            return {
+                "response": response_text,
+                "filters": {},
+                "questions_asked": [],
+                "ready_for_contact": False
+            }
         
         context = get_context_prompt(
             messages_history[-10:],
@@ -81,14 +154,22 @@ class ClaudeAgent:
                     "ready_for_contact": False
                 }
             
+            # Оновлюємо фільтри
             if result.get("filters"):
                 for key, value in result["filters"].items():
                     if value is not None:
+                        # Нормалізуємо назву району
+                        if key == "district":
+                            value = self._normalize_district(value, district_synonyms)
                         filters[key] = value
             
-            new_questions = result.get("questions_asked", [])
-            if new_questions:
-                questions_asked = sorted(list(set(questions_asked + new_questions)))
+            # Аналізуємо нові фільтри і оновлюємо questions_asked
+            questions_asked = self._analyze_filters(filters)
+            
+            # Також додаємо з відповіді AI якщо є
+            ai_questions = result.get("questions_asked", [])
+            if ai_questions:
+                questions_asked = sorted(list(set(questions_asked + ai_questions)))
             
             ready_for_contact = len(questions_asked) >= 6 or result.get("ready_for_contact", False)
             
