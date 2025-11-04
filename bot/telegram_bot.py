@@ -435,6 +435,18 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                     await session.commit()
 
                     if items:
+                        # Зберігаємо повні дані квартир з номерами
+                        current_apartments = conversation.last_shown_apartments or {}
+                        
+                        for idx, apt in enumerate(items, current_offset + 1):
+                            current_apartments[str(idx)] = apt  # Зберігаємо весь словник
+                        
+                        # Явно присвоюємо щоб SQLAlchemy побачив зміни
+                        conversation.last_shown_apartments = current_apartments
+                        await session.commit()
+                        
+                        logger.info(f"💾 Збережено квартири: {list(current_apartments.keys())}")
+                        
                         # Відправляємо повідомлення про початок
                         await message.answer(
                             f"🏠 Відмінно! Я підібрав {len(items)} варіанти для вас:\n\n",
@@ -600,9 +612,11 @@ async def handle_message(message: types.Message):
 
     elif action == "schedule_viewing":
         # Запис на перегляд
-        await message.answer(bot_response)
-
-        # Зберігаємо запис в Google Sheets
+        import re
+        
+        # Витягуємо номери варіантів з повідомлення
+        variant_numbers = re.findall(r'\d+', user_message)
+        
         async with async_session() as session:
             result = await session.execute(
                 select(Conversation).where(Conversation.user_id == user_id)
@@ -610,13 +624,48 @@ async def handle_message(message: types.Message):
             conversation = result.scalar_one_or_none()
 
             if conversation:
+                # Отримуємо повні дані квартир за номерами
+                selected_apartments = []
+                apartments_map = conversation.last_shown_apartments or {}
+                
+                logger.info(f"💾 Доступні квартири: {list(apartments_map.keys())}")
+                logger.info(f"🔍 Шукаємо варіанти: {variant_numbers}")
+                
+                for num in variant_numbers:
+                    apt_data = apartments_map.get(num)
+                    if apt_data:
+                        selected_apartments.append(apt_data)
+                        logger.info(f"✅ Знайдено варіант {num}: ID={apt_data.get('id')}")
+                    else:
+                        logger.warning(f"❌ Варіант {num} не знайдено в last_shown_apartments")
+                
+                # Формуємо дані для Google Sheets
                 user_data = {
                     'name': conversation.filters.get('name', 'Не вказано'),
                     'phone': conversation.phone_number or 'Не вказано',
                     'filters': conversation.filters,
-                    'apartment_info': user_message  # Зберігаємо останнє повідомлення
+                    'apartments': selected_apartments  # Повні дані квартир
                 }
-                sheets_service.add_viewing_request(user_data)
+                
+                try:
+                    sheets_service.add_viewing_request(user_data)
+                    
+                    # Відповідь користувачу (БЕЗ ID!)
+                    if bot_response:
+                        await message.answer(bot_response)
+                    else:
+                        variants_text = f"варіанти {', '.join(variant_numbers)}" if variant_numbers else "обрані варіанти"
+                        await message.answer(
+                            f"✅ Чудово! Записав вас на перегляд: {variants_text}\n\n"
+                            f"📞 Наш менеджер зв'яжеться з вами найближчим часом для узгодження часу перегляду!"
+                        )
+                    logger.info(f"✅ Записано на перегляд: user {user_id}, варіанти {variant_numbers}")
+                except Exception as e:
+                    logger.error(f"❌ Помилка запису в Google Sheets: {e}")
+                    await message.answer(
+                        "✅ Ваш запит прийнято!\n\n"
+                        "📞 Наш менеджер зв'яжеться з вами найближчим часом!"
+                    )
         return
 
     elif action == "change_filters":
