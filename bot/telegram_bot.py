@@ -29,6 +29,45 @@ silence_sent = {}
 
 import random
 from services.google_sheets import sheets_service
+import re
+
+def get_manager_availability():
+    """Повертає інформацію про доступність менеджера"""
+    now = datetime.now()
+    weekday = now.weekday()  # 0 = понеділок, 6 = неділя
+    current_hour = now.hour
+    
+    weekday_names = [
+        'понеділок', 'вівторок', 'середу', 'четвер', 
+        "п'ятницю", 'суботу', 'неділю'
+    ]
+    
+    # Перевіряємо чи зараз робочий час (пн-пт 10-18)
+    if weekday < 5 and 10 <= current_hour < 18:
+        return "Менеджер зв'яжеться з вами найближчим часом (сьогодні до 18:00)."
+    
+    # Якщо сьогодні робочий день, але після 18:00
+    if weekday < 5 and current_hour >= 18:
+        if weekday == 4:  # п'ятниця
+            return "Менеджер зв'яжеться з вами в понеділок з 10:00 до 18:00."
+        else:
+            next_day = weekday_names[weekday + 1]
+            return f"Менеджер зв'яжеться з вами в {next_day} з 10:00 до 18:00."
+    
+    # Якщо сьогодні робочий день, але до 10:00
+    if weekday < 5 and current_hour < 10:
+        today = weekday_names[weekday]
+        return f"Менеджер зв'яжеться з вами сьогодні ({today}) з 10:00 до 18:00."
+    
+    # Якщо субота
+    if weekday == 5:
+        return "Менеджер зв'яжеться з вами в понеділок з 10:00 до 18:00."
+    
+    # Якщо неділя
+    if weekday == 6:
+        return "Менеджер зв'яжеться з вами в понеділок з 10:00 до 18:00."
+    
+    return "Менеджер зв'яжеться з вами у робочий час (пн-пт з 10:00 до 18:00)."
 
 async def check_inactive_users():
     """Перевіряє неактивних користувачів і відправляє silence повідомлення"""
@@ -424,36 +463,37 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                     if items is None:
                         items = []
                     
-                    # Оновлюємо offset та total_found
+                    # Оновлюємо offset
                     if offset_increment:
-                        conversation.offset += 3
+                        conversation.offset += len(items)
                     else:
                         conversation.offset = len(items)
                     
-                    # Для total робимо додатковий запит без limit
-                    count_params = {k: v for k, v in api_params.items() if k != 'limit' and k != 'offset'}
-                    count_params['limit'] = 1000  # Великий ліміт для підрахунку
+                    # Підраховуємо загальну кількість (окремий запит без limit)
+                    count_params = {k: v for k, v in api_params.items() if k not in ['limit', 'offset']}
+                    count_params['limit'] = 10000
                     count_params['offset'] = 0
                     
-                    count_response = await client.post(config.PROPERTY_API_URL, json=count_params)
-                    if count_response.status_code == 200:
-                        count_data = count_response.json()
-                        count_items = count_data.get('items', [])
-                        total = len(count_items) if count_items else 0
-                        conversation.total_found = total
-                    else:
-                        total = len(items)
-                        conversation.total_found = total
+                    try:
+                        count_response = await client.post(config.PROPERTY_API_URL, json=count_params)
+                        if count_response.status_code == 200:
+                            count_data = count_response.json()
+                            count_items = count_data.get('items', [])
+                            total_found = len(count_items) if count_items else 0
+                        else:
+                            total_found = 0
+                    except:
+                        total_found = 0
                     
                     await session.commit()
                     
-                    logger.info(f"🏠 Found {len(items)} apartments, total: {total}, offset: {conversation.offset}")
+                    logger.info(f"🏠 Found {len(items)} apartments, total: {total_found}, offset: {conversation.offset}")
                     
                     # Зберігаємо результат API
                     api_result_msg = MessageHistory(
                         conversation_id=conversation.id,
                         user_message="[API REQUEST]",
-                        bot_response=f"Status: 200, Items: {len(items)}, Total: {total}, Offset: {conversation.offset}",
+                        bot_response=f"Status: 200, Items: {len(items)}, Total: {total_found}, Offset: {conversation.offset}",
                         timestamp=datetime.now()
                     )
                     session.add(api_result_msg)
@@ -475,16 +515,26 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                         for idx, apt in enumerate(items, start_idx):
                             await send_apartment(message, apt, idx)
                         
-                        # В кінці повідомляємо скільки ще є
-                        remaining = total - conversation.offset
-                        if remaining > 0:
-                            await message.answer(
-                                f"📊 Усього в базі знайдено <b>{total}</b> об'єктів за вашим запитом.\n"
-                                f"📁 Ще <b>{remaining}</b> варіантів доступно!\n\n"
-                                f"🔄 Напишіть 'Покажіть ще варіанти' якщо хочете побачити більше.\n"
-                                f"📞 Або 'Хочу на перегляд' для запису до рієлтора.",
-                                parse_mode="HTML"
-                            )
+                        # Перевіряємо чи є ще варіанти (робимо тестовий запит)
+                        test_params = api_params.copy()
+                        test_params['offset'] = conversation.offset
+                        test_params['limit'] = 1
+                        
+                        test_response = await client.post(config.PROPERTY_API_URL, json=test_params)
+                        has_more = False
+                        if test_response.status_code == 200:
+                            test_data = test_response.json()
+                            test_items = test_data.get('items', [])
+                            has_more = len(test_items) > 0
+                        
+                        # Повідомлення в кінці
+                        if has_more:
+                            final_message = f"📊 Показано {conversation.offset} варіантів.\n\n"
+                            final_message += "Напишіть 'Покажіть ще варіанти' щоб побачити більше."
+                        else:
+                            final_message = f"📊 Показано {conversation.offset} варіантів.\n\nВсі доступні варіанти показано."
+                        
+                        await message.answer(final_message, parse_mode="HTML")
                     else:
                         await message.answer(
                             "😔 На жаль, не знайдено варіантів за вашими параметрами.\n\n"
@@ -613,8 +663,7 @@ async def handle_message(message: types.Message):
     # Обробляємо дії користувача
     if action == "show_more":
         # Показати ще варіанти
-        if bot_response and bot_response.strip():
-            await message.answer(bot_response)
+        await message.answer("Зачекайте, шукаю ще варіанти...")
         await fetch_and_send_apartments(message, user_id, offset_increment=True)
         return
     
@@ -671,17 +720,19 @@ async def handle_message(message: types.Message):
                     sheets_service.add_viewing_request(user_data, apartment_data)
                     logger.info(f"✅ Записано на перегляд user {user_id}")
             
-            # Відповідь користувачу
+            # Відповідь користувачу з інформацією про робочий час
+            manager_info = get_manager_availability()
             if bot_response and bot_response.strip():
-                await message.answer(bot_response)
+                await message.answer(f"{bot_response}\n\n{manager_info}")
             else:
                 await message.answer(
-                    "Відмінно! Записую вас на перегляд. Наш рієлтор зв'яжеться з вами у будні з 9:00 до 18:00."
+                    f"Відмінно! Записую вас на перегляд. {manager_info}"
                 )
         except Exception as e:
             logger.error(f"❌ Помилка при записі на перегляд: {e}")
+            manager_info = get_manager_availability()
             await message.answer(
-                "Дякую! Ваша заявка прийнята. Наш рієлтор зв'яжеться з вами найближчим часом."
+                f"Дякую! Ваша заявка прийнята. {manager_info}"
             )
         return
     
@@ -721,13 +772,44 @@ async def handle_message(message: types.Message):
             conversation = result.scalar_one_or_none()
             
             if conversation and conversation.phone_number:
-                # Перевіряємо чи це запит на перегляд
-                viewing_keywords = ['запис', 'перегляд', 'оглян', 'подивит', 'запиш', 'viewing', 'огляду', 'записати', 'записую']
+                # Перевіряємо чи це запит на перегляд / консультацію
+                viewing_keywords = [
+                    'запис', 'перегляд', 'оглян', 'подивит', 'запиш', 'viewing', 
+                    'огляду', 'записати', 'записую', 'сподобав', 'подобає', 
+                    'консультац', 'поспілкуват', 'поспілкувати', 
+                    'рієлтор', 'менеджер', "зв'язати", 'цікавить', 'цікавлять'
+                ]
                 is_viewing_request = any(keyword in user_message.lower() for keyword in viewing_keywords)
                 
                 if is_viewing_request and conversation.last_shown_apartments:
-                    # Це запит на перегляд - обробляємо як schedule_viewing
+                    # Це запит на перегляд - визначаємо які варіанти
                     try:
+                        # Шукаємо номери варіантів у повідомленні
+                        variant_numbers = re.findall(r'(\d+)', user_message)
+                        
+                        apartments_to_save = []
+                        
+                        if variant_numbers:
+                            # Якщо вказані конкретні номери
+                            # Визначаємо початковий індекс для показаних варіантів
+                            start_offset = conversation.offset - len(conversation.last_shown_apartments)
+                            
+                            for num_str in variant_numbers:
+                                variant_num = int(num_str)
+                                # Обчислюємо індекс в масиві last_shown_apartments
+                                array_idx = variant_num - start_offset - 1
+                                
+                                if 0 <= array_idx < len(conversation.last_shown_apartments):
+                                    apt = conversation.last_shown_apartments[array_idx]
+                                    # Перевіряємо що цей варіант ще не додано
+                                    apt_id = apt.get('id')
+                                    if not any(a.get('id') == apt_id for a in apartments_to_save):
+                                        apartments_to_save.append(apt)
+                        else:
+                            # Якщо номери не вказані - беремо всі показані
+                            apartments_to_save = conversation.last_shown_apartments
+                        
+                        # Зберігаємо кожен варіант
                         user_data = {
                             'name': conversation.filters.get('name', 'Не вказано'),
                             'phone': conversation.phone_number or 'Не вказано',
@@ -735,11 +817,7 @@ async def handle_message(message: types.Message):
                             'filters': conversation.filters
                         }
                         
-                        # Дані про обраний об'єкт (беремо перший з останніх показаних)
-                        apartment_data = None
-                        if conversation.last_shown_apartments and len(conversation.last_shown_apartments) > 0:
-                            apt = conversation.last_shown_apartments[0]
-                            
+                        for apt in apartments_to_save:
                             # Витягуємо адресу
                             address_obj = apt.get('address', {})
                             if isinstance(address_obj, dict):
@@ -765,17 +843,25 @@ async def handle_message(message: types.Message):
                                 'floor': apt.get('floor', ''),
                                 'price': price
                             }
+                            
+                            sheets_service.add_viewing_request(user_data, apartment_data)
                         
-                        sheets_service.add_viewing_request(user_data, apartment_data)
-                        logger.info(f"✅ Записано на перегляд user {user_id} (через viewing keywords)")
+                        logger.info(f"✅ Записано на перегляд {len(apartments_to_save)} варіант(ів) для user {user_id}")
                         
-                        await message.answer(
-                            "Дякую! Записую вас на перегляд варіанта. Для уточнення деталей з вами зв'яжеться наш менеджер."
-                        )
+                        manager_info = get_manager_availability()
+                        if len(apartments_to_save) > 1:
+                            await message.answer(
+                                f"Дякую! Записую вас на перегляд {len(apartments_to_save)} варіантів. {manager_info}"
+                            )
+                        else:
+                            await message.answer(
+                                f"Дякую! Записую вас на перегляд варіанта. {manager_info}"
+                            )
                     except Exception as e:
                         logger.error(f"❌ Помилка при записі на перегляд: {e}")
+                        manager_info = get_manager_availability()
                         await message.answer(
-                            "Дякую! Ваша заявка прийнята. Наш менеджер зв'яжеться з вами найближчим часом."
+                            f"Дякую! Ваша заявка прийнята. {manager_info}"
                         )
                 elif not conversation.last_shown_apartments:
                     # Ще не показували варіанти - показуємо вперше
