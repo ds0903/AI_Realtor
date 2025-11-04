@@ -207,7 +207,7 @@ class GoogleSheetsService:
         self._load_all_data()
         return self._cache['synonyms'] or {}
     
-    def add_viewing_request(self, user_data, apartment_data=None):
+    def add_viewing_request(self, user_data):
         """
         Додає запис на перегляд в Google Sheets лист "offer"
         
@@ -215,17 +215,8 @@ class GoogleSheetsService:
             user_data: dict з даними користувача
                 - name: ім'я
                 - phone: телефон
-                - username: username з Telegram
-                - filters: фільтри пошуку (6 питань)
-            apartment_data: dict з даними обраної квартири
-                - id: ID об'єкта
-                - address: адреса
-                - street: вулиця
-                - house: будинок
-                - rooms: кімнат
-                - area: площа
-                - floor: поверх
-                - price: ціна
+                - filters: фільтри пошуку
+                - apartments: список обраних квартир (повні дані з API)
         """
         from datetime import datetime
         
@@ -238,56 +229,71 @@ class GoogleSheetsService:
                 worksheet = self.sheet.add_worksheet(title="offer", rows="1000", cols="20")
                 # Додаємо заголовки
                 worksheet.append_row([
-                    "Дата/Час", "Ім'я", "Username", "Телефон", 
-                    "ID об'єкта", "Вулиця", "Будинок", "Кімнат", "Площа", "Поверх", "Ціна",
-                    "Тип нерухомості", "Район", "Стан", "Бюджет"
+                    "Дата/Час", "Ім'я", "Телефон", 
+                    "ID об'єкта", "Адреса", "Кімнат", "Площа", "Поверх", "Ціна $",
+                    "Район", "Стан", "Бюджет"
                 ])
             
-            # Формуємо дані для запису
+            # Дані користувача
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             name = user_data.get('name', 'Не вказано')
-            username = user_data.get('username', 'Не вказано')
             phone = user_data.get('phone', 'Не вказано')
             
-            # Дані з фільтрів (6 питань)
+            # Дані з фільтрів
             filters = user_data.get('filters', {})
-            property_type = filters.get('type', '')
             district = filters.get('district', '')
-            rooms = filters.get('rooms', '')
-            budget = filters.get('budget', '')
             state = filters.get('state', '')
+            budget = filters.get('budget', '')
             
-            # Дані про обраний об'єкт
-            if apartment_data:
-                object_id = apartment_data.get('id', '')
-                street = apartment_data.get('street', '')
-                house = apartment_data.get('house', '')
-                apt_rooms = apartment_data.get('rooms', '')
-                area = apartment_data.get('area', '')
-                floor = apartment_data.get('floor', '')
-                price = apartment_data.get('price', '')
-            else:
-                object_id = ''
-                street = ''
-                house = ''
-                apt_rooms = ''
-                area = ''
-                floor = ''
-                price = ''
+            # Обрані квартири
+            apartments = user_data.get('apartments', [])
             
-            # Додаємо рядок
-            row = [
-                now, name, username, phone,
-                object_id, street, house, apt_rooms, area, floor, price,
-                property_type, district, state, budget
-            ]
+            if not apartments:
+                print("⚠️ Немає обраних квартир")
+                return False
             
-            worksheet.append_row(row)
-            print(f"✅ Додано запис на перегляд для {name} ({phone}) - об'єкт ID: {object_id}")
+            # Додаємо рядок для кожної квартири
+            for apt in apartments:
+                # Витягуємо дані з API структури
+                object_id = apt.get('id', '')
+                
+                # Адреса
+                address_obj = apt.get('address', {})
+                if isinstance(address_obj, dict):
+                    street_type = address_obj.get('street_type', '')
+                    street = address_obj.get('street', '')
+                    house = address_obj.get('house_number', '')
+                    address = f"{street_type} {street}, {house}".strip()
+                else:
+                    address = ''
+                
+                # Інші дані
+                rooms = apt.get('rooms', '')
+                area = apt.get('area_total', '')
+                floor = apt.get('floor', '')
+                floors_total = apt.get('floors_total', '')
+                floor_str = f"{floor}/{floors_total}" if floor and floors_total else str(floor)
+                
+                # Ціна
+                prices_obj = apt.get('prices', {})
+                price = prices_obj.get('value', '') if isinstance(prices_obj, dict) else ''
+                
+                # Формуємо рядок
+                row = [
+                    now, name, phone,
+                    object_id, address, rooms, area, floor_str, price,
+                    district, state, budget
+                ]
+                
+                worksheet.append_row(row)
+                print(f"✅ Додано запис на перегляд для {name} ({phone}) - об'єкт ID: {object_id}")
+            
             return True
             
         except Exception as e:
             print(f"❌ Error adding viewing request: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
 sheets_service = GoogleSheetsService()
