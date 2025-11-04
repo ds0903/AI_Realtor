@@ -544,7 +544,6 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                         # Повідомлення в кінці
                         if has_more:
                             final_message = f"📊 Показано {conversation.offset} з {total_found} варіантів.\n\n"
-                            final_message += "Напишіть 'Покажіть ще варіанти' щоб побачити більше."
                         else:
                             final_message = f"📊 Показано всі {total_found} варіантів."
                         
@@ -662,6 +661,30 @@ async def handle_message(message: types.Message):
     # Зберігаємо пару повідомлень
     await save_message_pair(user_id, user_message, bot_response)
     
+    # Перевіряємо чи змінилися фільтри (ДО оновлення в БД)
+    filters_changed = False
+    old_filters = {}
+    async with async_session() as session:
+        result = await session.execute(
+            select(Conversation).where(Conversation.user_id == user_id)
+        )
+        conversation = result.scalar_one_or_none()
+        
+        if conversation:
+            old_filters = dict(conversation.filters or {})
+            new_filters = response.get("filters", {})
+            
+            # Порівнюємо ключові параметри
+            key_params = ['rooms', 'district', 'state', 'budget', 'floor', 'price_min', 'price_max']
+            
+            for param in key_params:
+                old_val = str(old_filters.get(param, '')).lower().strip()
+                new_val = str(new_filters.get(param, '')).lower().strip()
+                if old_val != new_val and new_val != '':
+                    filters_changed = True
+                    logger.info(f"🔄 Filter changed: {param} = {old_val} -> {new_val}")
+                    break
+    
     # Оновлюємо фільтри
     async with async_session() as session:
         result = await session.execute(
@@ -673,6 +696,17 @@ async def handle_message(message: types.Message):
             conversation.filters = response.get("filters", conversation.filters)
             conversation.updated_at = datetime.now()
             await session.commit()
+    
+    # Встановлюємо action якщо фільтри змінилися
+    if not action and filters_changed:
+        async with async_session() as session:
+            result = await session.execute(
+                select(Conversation).where(Conversation.user_id == user_id)
+            )
+            conversation = result.scalar_one_or_none()
+            if conversation and conversation.phone_number:
+                action = "change_filters"
+                logger.info("🔄 Auto-detected filter change, setting action = change_filters")
     
     # Перевіряємо чи це запит на show_more (якщо AI не розпізнав)
     if not action:
@@ -686,10 +720,12 @@ async def handle_message(message: types.Message):
                 show_more_keywords = [
                     'ще варіант', 'ще квартир', 'покажи ще', 'покажіть ще',
                     'показати ще', 'більше варіант', 'більше квартир',
-                    'наступн', 'далі', 'інші варіант'
+                    'наступн', 'далі', 'інші варіант', 'інш квартир',
+                    'інший варіант', 'покажи інші', 'покажіть інші'
                 ]
                 if any(keyword in user_message.lower() for keyword in show_more_keywords):
                     action = "show_more"
+                    logger.info("🔄 Auto-detected show_more request")
     
     # Обробляємо дії користувача
     if action == "show_more":
@@ -709,7 +745,7 @@ async def handle_message(message: types.Message):
                 )
                 conversation = result.scalar_one_or_none()
                 
-                if conversation:
+                if conversation and conversation.last_shown_apartments:
                     user_data = {
                         'name': conversation.filters.get('name', 'Не вказано'),
                         'phone': conversation.phone_number or 'Не вказано',
@@ -717,12 +753,29 @@ async def handle_message(message: types.Message):
                         'filters': conversation.filters
                     }
                     
-                    # Дані про обраний об'єкт (беремо перший з останніх показаних)
-                    apartment_data = None
-                    if conversation.last_shown_apartments and len(conversation.last_shown_apartments) > 0:
-                        apt = conversation.last_shown_apartments[0]
+                    # Отримуємо viewing_variants з AI відповіді
+                    viewing_variants = response.get('viewing_variants', [])
+                    apartments_to_save = []
+                    
+                    if viewing_variants:
+                        # AI визначив конкретні номери
+                        start_offset = conversation.offset - len(conversation.last_shown_apartments)
                         
-                        # Витягуємо адресу
+                        for variant_num in viewing_variants:
+                            array_idx = variant_num - start_offset - 1
+                            
+                            if 0 <= array_idx < len(conversation.last_shown_apartments):
+                                apt = conversation.last_shown_apartments[array_idx]
+                                apt_id = apt.get('id')
+                                if not any(a.get('id') == apt_id for a in apartments_to_save):
+                                    apartments_to_save.append(apt)
+                                    logger.info(f"✅ Варіант #{variant_num} (array_idx={array_idx}) - ID: {apt_id}")
+                    else:
+                        # Якщо AI не визначив номери - беремо перший
+                        apartments_to_save = [conversation.last_shown_apartments[0]]
+                    
+                    # Зберігаємо кожен варіант
+                    for apt in apartments_to_save:
                         address_obj = apt.get('address', {})
                         if isinstance(address_obj, dict):
                             street = address_obj.get('street', '')
@@ -731,7 +784,6 @@ async def handle_message(message: types.Message):
                             street = ''
                             house = ''
                         
-                        # Витягуємо ціну
                         prices_obj = apt.get('prices', {})
                         if isinstance(prices_obj, dict):
                             price = prices_obj.get('value', '')
@@ -747,9 +799,10 @@ async def handle_message(message: types.Message):
                             'floor': apt.get('floor', ''),
                             'price': price
                         }
+                        
+                        sheets_service.add_viewing_request(user_data, apartment_data)
                     
-                    sheets_service.add_viewing_request(user_data, apartment_data)
-                    logger.info(f"✅ Записано на перегляд user {user_id}")
+                    logger.info(f"✅ Записано на перегляд {len(apartments_to_save)} варіант(ів) для user {user_id}")
             
             # Відповідь користувачу з інформацією про робочий час
             manager_info = get_manager_availability()
@@ -813,29 +866,27 @@ async def handle_message(message: types.Message):
                 is_viewing_request = any(keyword in user_message.lower() for keyword in viewing_keywords)
                 
                 if is_viewing_request and conversation.last_shown_apartments:
-                    # Це запит на перегляд - визначаємо які варіанти
+                    # Це запит на перегляд - AI вже повинен був опрацювати це в action="schedule_viewing"
+                    # Тобто цей код є fallback на випадок, якщо AI не розпізнав action
                     try:
-                        # Шукаємо номери варіантів у повідомленні
-                        variant_numbers = re.findall(r'(\d+)', user_message)
+                        # Fallback: простий парсинг номерів
+                        variant_numbers = re.findall(r'\d+', user_message)
                         
                         apartments_to_save = []
                         
                         if variant_numbers:
-                            # Якщо вказані конкретні номери
-                            # Визначаємо початковий індекс для показаних варіантів
                             start_offset = conversation.offset - len(conversation.last_shown_apartments)
                             
                             for num_str in variant_numbers:
                                 variant_num = int(num_str)
-                                # Обчислюємо індекс в масиві last_shown_apartments
                                 array_idx = variant_num - start_offset - 1
                                 
                                 if 0 <= array_idx < len(conversation.last_shown_apartments):
                                     apt = conversation.last_shown_apartments[array_idx]
-                                    # Перевіряємо що цей варіант ще не додано
                                     apt_id = apt.get('id')
                                     if not any(a.get('id') == apt_id for a in apartments_to_save):
                                         apartments_to_save.append(apt)
+                                        logger.info(f"✅ Fallback: Варіант #{variant_num} (array_idx={array_idx}) - ID: {apt_id}")
                         else:
                             # Якщо номери не вказані - беремо всі показані
                             apartments_to_save = conversation.last_shown_apartments
