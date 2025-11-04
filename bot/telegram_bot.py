@@ -45,8 +45,8 @@ async def check_inactive_users():
                 if last_message_time:
                     time_diff = (current_time - last_message_time).total_seconds()
                     
-                    # Якщо користувач мовчить 30+ секунд і ми ще не відправляли silence
-                    if time_diff >= 30 and not silence_sent.get(user_id, False):
+                    # Якщо користувач мовчить 60+ секунд і ми ще не відправляли silence
+                    if time_diff >= 60 and not silence_sent.get(user_id, False):
                         # Перевіряємо чи користувач в процесі розмови (не отримав контакт)
                         async with async_session() as session:
                             result = await session.execute(
@@ -54,26 +54,41 @@ async def check_inactive_users():
                             )
                             conversation = result.scalar_one_or_none()
                             
-                            # Відправляємо silence тільки якщо є розмова і немає контакту
+                            # Відправляємо silence тільки якщо:
+                            # 1. Є розмова
+                            # 2. Немає контакту
+                            # 3. Є хоча б одне питання на яке відповів користувач
                             if conversation and not conversation.phone_number:
-                                silence_responses = sheets_service.get_silence_responses()
+                                # Перевіряємо чи є хоча б одне повідомлення (окрім /start)
+                                result_history = await session.execute(
+                                    select(MessageHistory)
+                                    .where(MessageHistory.conversation_id == conversation.id)
+                                    .where(MessageHistory.user_message != "/start")
+                                    .where(MessageHistory.user_message != "[SILENCE TRIGGER]")
+                                    .where(MessageHistory.user_message != "[API REQUEST]")
+                                    .where(MessageHistory.user_message != "[API ERROR]")
+                                )
+                                has_messages = result_history.scalar_one_or_none() is not None
                                 
-                                if silence_responses:
-                                    # Вибираємо випадкову відповідь
-                                    silence_message = random.choice(silence_responses)
+                                if has_messages:
+                                    silence_responses = sheets_service.get_silence_responses()
                                     
-                                    try:
-                                        await bot.send_message(user_id, silence_message)
+                                    if silence_responses:
+                                        # Вибираємо випадкову відповідь
+                                        silence_message = random.choice(silence_responses)
                                         
-                                        # Зберігаємо в базу
-                                        await save_message_pair(user_id, "[SILENCE TRIGGER]", silence_message)
-                                        
-                                        # Позначаємо що відправили
-                                        silence_sent[user_id] = True
-                                        
-                                        logger.info(f"🔕 Silence trigger for user {user_id}")
-                                    except Exception as e:
-                                        logger.error(f"❌ Error sending silence message to {user_id}: {e}")
+                                        try:
+                                            await bot.send_message(user_id, silence_message)
+                                            
+                                            # Зберігаємо в базу
+                                            await save_message_pair(user_id, "[SILENCE TRIGGER]", silence_message)
+                                            
+                                            # Позначаємо що відправили
+                                            silence_sent[user_id] = True
+                                            
+                                            logger.info(f"🔕 Silence trigger for user {user_id}")
+                                        except Exception as e:
+                                            logger.error(f"❌ Error sending silence message to {user_id}: {e}")
                         
         except Exception as e:
             logger.error(f"❌ Error in check_inactive_users: {e}")
@@ -445,6 +460,10 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                     await session.commit()
                     
                     if items:
+                        # Зберігаємо показані об'єкти
+                        conversation.last_shown_apartments = items
+                        await session.commit()
+                        
                         # Відправляємо повідомлення про початок
                         await message.answer(
                             f"🏠 Відмінно! Я підібрав {len(items)} варіанти для вас:\n\n",
@@ -594,29 +613,76 @@ async def handle_message(message: types.Message):
     # Обробляємо дії користувача
     if action == "show_more":
         # Показати ще варіанти
-        await message.answer(bot_response)
+        if bot_response and bot_response.strip():
+            await message.answer(bot_response)
         await fetch_and_send_apartments(message, user_id, offset_increment=True)
         return
     
     elif action == "schedule_viewing":
         # Запис на перегляд
-        await message.answer(bot_response)
         
         # Зберігаємо запис в Google Sheets
-        async with async_session() as session:
-            result = await session.execute(
-                select(Conversation).where(Conversation.user_id == user_id)
-            )
-            conversation = result.scalar_one_or_none()
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(Conversation).where(Conversation.user_id == user_id)
+                )
+                conversation = result.scalar_one_or_none()
+                
+                if conversation:
+                    user_data = {
+                        'name': conversation.filters.get('name', 'Не вказано'),
+                        'phone': conversation.phone_number or 'Не вказано',
+                        'username': f"@{message.from_user.username}" if message.from_user.username else 'Не вказано',
+                        'filters': conversation.filters
+                    }
+                    
+                    # Дані про обраний об'єкт (беремо перший з останніх показаних)
+                    apartment_data = None
+                    if conversation.last_shown_apartments and len(conversation.last_shown_apartments) > 0:
+                        apt = conversation.last_shown_apartments[0]
+                        
+                        # Витягуємо адресу
+                        address_obj = apt.get('address', {})
+                        if isinstance(address_obj, dict):
+                            street = address_obj.get('street', '')
+                            house = address_obj.get('house_number', '')
+                        else:
+                            street = ''
+                            house = ''
+                        
+                        # Витягуємо ціну
+                        prices_obj = apt.get('prices', {})
+                        if isinstance(prices_obj, dict):
+                            price = prices_obj.get('value', '')
+                        else:
+                            price = ''
+                        
+                        apartment_data = {
+                            'id': apt.get('id', ''),
+                            'street': street,
+                            'house': house,
+                            'rooms': apt.get('rooms', ''),
+                            'area': apt.get('area_total', ''),
+                            'floor': apt.get('floor', ''),
+                            'price': price
+                        }
+                    
+                    sheets_service.add_viewing_request(user_data, apartment_data)
+                    logger.info(f"✅ Записано на перегляд user {user_id}")
             
-            if conversation:
-                user_data = {
-                    'name': conversation.filters.get('name', 'Не вказано'),
-                    'phone': conversation.phone_number or 'Не вказано',
-                    'filters': conversation.filters,
-                    'apartment_info': user_message  # Зберігаємо останнє повідомлення
-                }
-                sheets_service.add_viewing_request(user_data)
+            # Відповідь користувачу
+            if bot_response and bot_response.strip():
+                await message.answer(bot_response)
+            else:
+                await message.answer(
+                    "Відмінно! Записую вас на перегляд. Наш рієлтор зв'яжеться з вами у будні з 9:00 до 18:00."
+                )
+        except Exception as e:
+            logger.error(f"❌ Помилка при записі на перегляд: {e}")
+            await message.answer(
+                "Дякую! Ваша заявка прийнята. Наш рієлтор зв'яжеться з вами найближчим часом."
+            )
         return
     
     elif action == "change_filters":
@@ -631,7 +697,8 @@ async def handle_message(message: types.Message):
                 conversation.offset = 0
                 await session.commit()
         
-        await message.answer(bot_response)
+        if bot_response and bot_response.strip():
+            await message.answer(bot_response)
         
         # Перевіряємо чи є контакт, якщо є - відправляємо нові варіанти
         async with async_session() as session:
@@ -654,9 +721,69 @@ async def handle_message(message: types.Message):
             conversation = result.scalar_one_or_none()
             
             if conversation and conversation.phone_number:
-                # Контакт вже є - відправляємо варіанти
-                await message.answer(bot_response)
-                await fetch_and_send_apartments(message, user_id)
+                # Перевіряємо чи це запит на перегляд
+                viewing_keywords = ['запис', 'перегляд', 'оглян', 'подивит', 'запиш', 'viewing', 'огляду', 'записати', 'записую']
+                is_viewing_request = any(keyword in user_message.lower() for keyword in viewing_keywords)
+                
+                if is_viewing_request and conversation.last_shown_apartments:
+                    # Це запит на перегляд - обробляємо як schedule_viewing
+                    try:
+                        user_data = {
+                            'name': conversation.filters.get('name', 'Не вказано'),
+                            'phone': conversation.phone_number or 'Не вказано',
+                            'username': f"@{message.from_user.username}" if message.from_user.username else 'Не вказано',
+                            'filters': conversation.filters
+                        }
+                        
+                        # Дані про обраний об'єкт (беремо перший з останніх показаних)
+                        apartment_data = None
+                        if conversation.last_shown_apartments and len(conversation.last_shown_apartments) > 0:
+                            apt = conversation.last_shown_apartments[0]
+                            
+                            # Витягуємо адресу
+                            address_obj = apt.get('address', {})
+                            if isinstance(address_obj, dict):
+                                street = address_obj.get('street', '')
+                                house = address_obj.get('house_number', '')
+                            else:
+                                street = ''
+                                house = ''
+                            
+                            # Витягуємо ціну
+                            prices_obj = apt.get('prices', {})
+                            if isinstance(prices_obj, dict):
+                                price = prices_obj.get('value', '')
+                            else:
+                                price = ''
+                            
+                            apartment_data = {
+                                'id': apt.get('id', ''),
+                                'street': street,
+                                'house': house,
+                                'rooms': apt.get('rooms', ''),
+                                'area': apt.get('area_total', ''),
+                                'floor': apt.get('floor', ''),
+                                'price': price
+                            }
+                        
+                        sheets_service.add_viewing_request(user_data, apartment_data)
+                        logger.info(f"✅ Записано на перегляд user {user_id} (через viewing keywords)")
+                        
+                        await message.answer(
+                            "Дякую! Записую вас на перегляд варіанта. Для уточнення деталей з вами зв'яжеться наш менеджер."
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Помилка при записі на перегляд: {e}")
+                        await message.answer(
+                            "Дякую! Ваша заявка прийнята. Наш менеджер зв'яжеться з вами найближчим часом."
+                        )
+                elif not conversation.last_shown_apartments:
+                    # Ще не показували варіанти - показуємо вперше
+                    await fetch_and_send_apartments(message, user_id)
+                else:
+                    # Вже показували варіанти - просто відповідаємо
+                    if bot_response and bot_response.strip():
+                        await message.answer(bot_response)
             else:
                 # Контакту немає - показуємо кнопку
                 keyboard = ReplyKeyboardMarkup(
@@ -666,9 +793,12 @@ async def handle_message(message: types.Message):
                     resize_keyboard=True,
                     one_time_keyboard=True
                 )
-                await message.answer(bot_response, reply_markup=keyboard)
+                if bot_response and bot_response.strip():  # Перевіряємо що відповідь не порожня
+                    await message.answer(bot_response, reply_markup=keyboard)
     else:
-        await message.answer(bot_response)
+        # Відправляємо звичайну відповідь тільки якщо вона не порожня
+        if bot_response and bot_response.strip():
+            await message.answer(bot_response)
 
 async def main():
     """Головна функція запуску бота"""

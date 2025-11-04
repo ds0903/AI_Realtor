@@ -21,6 +21,7 @@ class Conversation(Base):
     offset = Column(Integer, default=0)  # Для пагінації варіантів
     total_found = Column(Integer, default=0)  # Скільки всього знайдено
     last_query_params = Column(JSON)  # Останні параметри запиту
+    last_shown_apartments = Column(JSON)  # Останні показані об'єкти
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     

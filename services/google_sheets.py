@@ -207,38 +207,49 @@ class GoogleSheetsService:
         self._load_all_data()
         return self._cache['synonyms'] or {}
     
-    def add_viewing_request(self, user_data):
+    def add_viewing_request(self, user_data, apartment_data=None):
         """
-        Додає запис на перегляд в Google Sheets
+        Додає запис на перегляд в Google Sheets лист "offer"
         
         Args:
             user_data: dict з даними користувача
                 - name: ім'я
                 - phone: телефон
-                - filters: фільтри пошуку
-                - apartment_info: інформація про обрану квартиру (опціонально)
+                - username: username з Telegram
+                - filters: фільтри пошуку (6 питань)
+            apartment_data: dict з даними обраної квартири
+                - id: ID об'єкта
+                - address: адреса
+                - street: вулиця
+                - house: будинок
+                - rooms: кімнат
+                - area: площа
+                - floor: поверх
+                - price: ціна
         """
         from datetime import datetime
         
         try:
-            # Щукаємо аркуш Viewings, якщо немає - створюємо
+            # Шукаємо аркуш offer, якщо немає - створюємо
             try:
-                worksheet = self.sheet.worksheet("Viewings")
+                worksheet = self.sheet.worksheet("offer")
             except:
                 # Створюємо новий аркуш
-                worksheet = self.sheet.add_worksheet(title="Viewings", rows="1000", cols="20")
+                worksheet = self.sheet.add_worksheet(title="offer", rows="1000", cols="20")
                 # Додаємо заголовки
                 worksheet.append_row([
-                    "Дата/Час", "Ім'я", "Телефон", 
-                    "Тип", "Район", "Кімнат", "Бюджет", "Ремонт",
-                    "Обрана квартира"
+                    "Дата/Час", "Ім'я", "Username", "Телефон", 
+                    "ID об'єкта", "Вулиця", "Будинок", "Кімнат", "Площа", "Поверх", "Ціна",
+                    "Тип нерухомості", "Район", "Стан", "Бюджет"
                 ])
             
             # Формуємо дані для запису
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             name = user_data.get('name', 'Не вказано')
+            username = user_data.get('username', 'Не вказано')
             phone = user_data.get('phone', 'Не вказано')
             
+            # Дані з фільтрів (6 питань)
             filters = user_data.get('filters', {})
             property_type = filters.get('type', '')
             district = filters.get('district', '')
@@ -246,17 +257,33 @@ class GoogleSheetsService:
             budget = filters.get('budget', '')
             state = filters.get('state', '')
             
-            apartment_info = user_data.get('apartment_info', '')
+            # Дані про обраний об'єкт
+            if apartment_data:
+                object_id = apartment_data.get('id', '')
+                street = apartment_data.get('street', '')
+                house = apartment_data.get('house', '')
+                apt_rooms = apartment_data.get('rooms', '')
+                area = apartment_data.get('area', '')
+                floor = apartment_data.get('floor', '')
+                price = apartment_data.get('price', '')
+            else:
+                object_id = ''
+                street = ''
+                house = ''
+                apt_rooms = ''
+                area = ''
+                floor = ''
+                price = ''
             
             # Додаємо рядок
             row = [
-                now, name, phone,
-                property_type, district, rooms, budget, state,
-                apartment_info
+                now, name, username, phone,
+                object_id, street, house, apt_rooms, area, floor, price,
+                property_type, district, state, budget
             ]
             
             worksheet.append_row(row)
-            print(f"✅ Додано запис на перегляд для {name} ({phone})")
+            print(f"✅ Додано запис на перегляд для {name} ({phone}) - об'єкт ID: {object_id}")
             return True
             
         except Exception as e:
