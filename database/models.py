@@ -22,6 +22,7 @@ class Conversation(Base):
     total_found = Column(Integer, default=0)  # Скільки всього знайдено
     last_query_params = Column(JSON)  # Останні параметри запиту
     last_shown_apartments = Column(JSON)  # Останні показані об'єкти
+    last_activity = Column(DateTime)  # Час останньої активності (для очищення)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     

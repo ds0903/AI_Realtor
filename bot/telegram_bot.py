@@ -30,6 +30,38 @@ silence_sent = {}
 import random
 from services.google_sheets import sheets_service
 
+async def clean_old_apartments():
+    """Очищає кеш квартир у неактивних користувачів (більше 5 хв)"""
+    while True:
+        try:
+            await asyncio.sleep(60)  # Перевіряємо кожну хвилину
+            
+            current_time = datetime.now()
+            
+            async with async_session() as session:
+                # Шукаємо користувачів з застарілим кешем
+                result = await session.execute(
+                    select(Conversation).where(
+                        Conversation.last_shown_apartments.isnot(None),
+                        Conversation.last_activity.isnot(None)
+                    )
+                )
+                conversations = result.scalars().all()
+                
+                for conversation in conversations:
+                    time_diff = (current_time - conversation.last_activity).total_seconds()
+                    
+                    # Якщо неактивність більше 5 хв (300 сек)
+                    if time_diff > 300:
+                        conversation.last_shown_apartments = {}
+                        conversation.last_activity = None
+                        await session.commit()
+                        logger.info(f"🧹 Очищено кеш квартир для user {conversation.user_id}")
+                        
+        except Exception as e:
+            logger.error(f"❌ Error in clean_old_apartments: {e}")
+            await asyncio.sleep(60)
+
 async def check_inactive_users():
     """Перевіряє неактивних користувачів і відправляє silence повідомлення"""
     while True:
@@ -436,16 +468,23 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
 
                     if items:
                         # Зберігаємо повні дані квартир з номерами
+                        from sqlalchemy.orm.attributes import flag_modified
+                        
                         current_apartments = conversation.last_shown_apartments or {}
                         
                         for idx, apt in enumerate(items, current_offset + 1):
                             current_apartments[str(idx)] = apt  # Зберігаємо весь словник
                         
-                        # Явно присвоюємо щоб SQLAlchemy побачив зміни
+                        # Явно присвоюємо і позначаємо як змінене
                         conversation.last_shown_apartments = current_apartments
+                        flag_modified(conversation, "last_shown_apartments")
                         await session.commit()
                         
                         logger.info(f"💾 Збережено квартири: {list(current_apartments.keys())}")
+                        
+                        # Оновлюємо час останньої активності для очищення
+                        conversation.last_activity = datetime.now()
+                        await session.commit()
                         
                         # Відправляємо повідомлення про початок
                         await message.answer(
@@ -601,6 +640,9 @@ async def handle_message(message: types.Message):
         if conversation:
             conversation.filters = response.get("filters", conversation.filters)
             conversation.updated_at = datetime.now()
+            # Оновлюємо last_activity щоб не очищався кеш квартир
+            if conversation.last_shown_apartments:
+                conversation.last_activity = datetime.now()
             await session.commit()
 
     # Обробляємо дії користувача
@@ -726,10 +768,12 @@ async def main():
     logger.info("✅ База даних ініціалізована")
     logger.info("🤖 Бот запускається...")
     logger.info("🔔 Silence checker запускається...")
+    logger.info("🧹 Apartments cache cleaner запускається...")
     logger.info("=" * 60)
     
-    # Запускаємо фоновий таск для перевірки silence
+    # Запускаємо фонові таски
     asyncio.create_task(check_inactive_users())
+    asyncio.create_task(clean_old_apartments())
     
     await dp.start_polling(bot)
 
