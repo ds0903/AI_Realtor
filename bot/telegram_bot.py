@@ -469,21 +469,35 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                     else:
                         conversation.offset = len(items)
                     
-                    # Підраховуємо загальну кількість (окремий запит без limit)
-                    count_params = {k: v for k, v in api_params.items() if k not in ['limit', 'offset']}
-                    count_params['limit'] = 10000
-                    count_params['offset'] = 0
+                    # Підраховуємо загальну кількість
+                    # Робимо запит з великим offset щоб знайти всі
+                    all_items = list(items)  # Зберігаємо поточні
+                    current_offset = api_params.get('offset', 0) + len(items)
                     
-                    try:
-                        count_response = await client.post(config.PROPERTY_API_URL, json=count_params)
-                        if count_response.status_code == 200:
-                            count_data = count_response.json()
-                            count_items = count_data.get('items', [])
-                            total_found = len(count_items) if count_items else 0
-                        else:
-                            total_found = 0
-                    except:
-                        total_found = 0
+                    # Продовжуємо запити поки є результати
+                    while True:
+                        count_params = api_params.copy()
+                        count_params['offset'] = current_offset
+                        count_params['limit'] = 100
+                        
+                        try:
+                            count_response = await client.post(config.PROPERTY_API_URL, json=count_params)
+                            if count_response.status_code == 200:
+                                count_data = count_response.json()
+                                count_items = count_data.get('items', [])
+                                if count_items:
+                                    all_items.extend(count_items)
+                                    current_offset += len(count_items)
+                                    if len(count_items) < 100:
+                                        break
+                                else:
+                                    break
+                            else:
+                                break
+                        except:
+                            break
+                    
+                    total_found = len(all_items)
                     
                     await session.commit()
                     
@@ -529,10 +543,10 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                         
                         # Повідомлення в кінці
                         if has_more:
-                            final_message = f"📊 Показано {conversation.offset} варіантів.\n\n"
+                            final_message = f"📊 Показано {conversation.offset} з {total_found} варіантів.\n\n"
                             final_message += "Напишіть 'Покажіть ще варіанти' щоб побачити більше."
                         else:
-                            final_message = f"📊 Показано {conversation.offset} варіантів.\n\nВсі доступні варіанти показано."
+                            final_message = f"📊 Показано всі {total_found} варіантів."
                         
                         await message.answer(final_message, parse_mode="HTML")
                     else:
@@ -659,6 +673,23 @@ async def handle_message(message: types.Message):
             conversation.filters = response.get("filters", conversation.filters)
             conversation.updated_at = datetime.now()
             await session.commit()
+    
+    # Перевіряємо чи це запит на show_more (якщо AI не розпізнав)
+    if not action:
+        async with async_session() as session:
+            result = await session.execute(
+                select(Conversation).where(Conversation.user_id == user_id)
+            )
+            conversation = result.scalar_one_or_none()
+            
+            if conversation and conversation.last_shown_apartments:
+                show_more_keywords = [
+                    'ще варіант', 'ще квартир', 'покажи ще', 'покажіть ще',
+                    'показати ще', 'більше варіант', 'більше квартир',
+                    'наступн', 'далі', 'інші варіант'
+                ]
+                if any(keyword in user_message.lower() for keyword in show_more_keywords):
+                    action = "show_more"
     
     # Обробляємо дії користувача
     if action == "show_more":
