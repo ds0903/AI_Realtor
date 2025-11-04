@@ -206,5 +206,61 @@ class GoogleSheetsService:
         """Отримує синоніми районів з кешу"""
         self._load_all_data()
         return self._cache['synonyms'] or {}
+    
+    def add_viewing_request(self, user_data):
+        """
+        Додає запис на перегляд в Google Sheets
+        
+        Args:
+            user_data: dict з даними користувача
+                - name: ім'я
+                - phone: телефон
+                - filters: фільтри пошуку
+                - apartment_info: інформація про обрану квартиру (опціонально)
+        """
+        from datetime import datetime
+        
+        try:
+            # Щукаємо аркуш Viewings, якщо немає - створюємо
+            try:
+                worksheet = self.sheet.worksheet("Viewings")
+            except:
+                # Створюємо новий аркуш
+                worksheet = self.sheet.add_worksheet(title="Viewings", rows="1000", cols="20")
+                # Додаємо заголовки
+                worksheet.append_row([
+                    "Дата/Час", "Ім'я", "Телефон", 
+                    "Тип", "Район", "Кімнат", "Бюджет", "Ремонт",
+                    "Обрана квартира"
+                ])
+            
+            # Формуємо дані для запису
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            name = user_data.get('name', 'Не вказано')
+            phone = user_data.get('phone', 'Не вказано')
+            
+            filters = user_data.get('filters', {})
+            property_type = filters.get('type', '')
+            district = filters.get('district', '')
+            rooms = filters.get('rooms', '')
+            budget = filters.get('budget', '')
+            state = filters.get('state', '')
+            
+            apartment_info = user_data.get('apartment_info', '')
+            
+            # Додаємо рядок
+            row = [
+                now, name, phone,
+                property_type, district, rooms, budget, state,
+                apartment_info
+            ]
+            
+            worksheet.append_row(row)
+            print(f"✅ Додано запис на перегляд для {name} ({phone})")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error adding viewing request: {e}")
+            return False
 
 sheets_service = GoogleSheetsService()

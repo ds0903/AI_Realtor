@@ -18,6 +18,9 @@ class Conversation(Base):
     phone_number = Column(String(50))
     messages = Column(JSON)  # Залишаємо для сумісності
     filters = Column(JSON)
+    offset = Column(Integer, default=0)  # Для пагінації варіантів
+    total_found = Column(Integer, default=0)  # Скільки всього знайдено
+    last_query_params = Column(JSON)  # Останні параметри запиту
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     

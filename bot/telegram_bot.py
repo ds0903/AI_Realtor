@@ -263,6 +263,239 @@ async def cmd_start(message: types.Message):
     
     await message.answer(response["response"])
 
+async def fetch_and_send_apartments(message: types.Message, user_id: int, offset_increment: bool = False):
+    """
+    Отримує і відправляє варіанти квартир
+    
+    Args:
+        message: повідомлення користувача
+        user_id: ID користувача
+        offset_increment: чи збільшувати offset (для show_more)
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(Conversation).where(Conversation.user_id == user_id)
+        )
+        conversation = result.scalar_one_or_none()
+        
+        if not conversation:
+            return
+        
+        filters = conversation.filters or {}
+        phone_number = conversation.phone_number
+        
+        # Ініціалізуємо offset якщо None (для старих записів)
+        if conversation.offset is None:
+            conversation.offset = 0
+            await session.commit()
+        
+        # Формуємо параметри для API
+        api_params = {
+            "key": config.PROPERTY_API_KEY,
+            "limit": 3,
+            "offset": (conversation.offset + 3) if offset_increment else conversation.offset
+        }
+        
+        # Мапінг районів на ID
+        district_mapping = {
+            "Київський р-н": 5,
+            "Малиновський р-н": 6,
+            "Приморський р-н": 8,
+            "Суворовський р-н": 11
+        }
+        
+        # Мапінг мікрорайонів на ID
+        microarea_mapping = {
+            "Бугаївка": 89,
+            "Дзержинського": 90,
+            "Застава": 91,
+            "Ленпоселок": 92,
+            "Мельниця": 93,
+            "Молдаванка": 94,
+            "Сахарний": 95,
+            "Слободка": 96,
+            "Фонтан": 97,
+            "Фонтанка": 97,
+            "Черемушки": 98,
+            "Аркадія": 99,
+            "Центр": 102,
+            "Пригород": 97,
+            "Шевченко-Французький": 103,
+            "Большевик": 104,
+            "Котовського": 105,
+            "Крива Балка": 106,
+            "Куяльник": 107,
+            "Лузановка": 108,
+            "Нефтяніків": 109,
+            "Пересипь": 110,
+            "Шевченко": 112,
+            "Вузовський": 113,
+            "Дача Ковалевського": 114,
+            "Дружний": 115,
+            "Таїрова": 116,
+            "Царське село": 118,
+            "Червоний хутор": 119,
+            "Чорноморка": 121,
+            "Чубаївка": 122
+        }
+        
+        # Додаємо район/мікрорайон
+        if filters.get("district"):
+            district_name = filters["district"]
+            if district_name.lower() not in ["всі райони", "всі", "будь-який", "неважливо"]:
+                if district_name in microarea_mapping:
+                    api_params["microarea_id"] = microarea_mapping[district_name]
+                elif district_name in district_mapping:
+                    api_params["district_id"] = district_mapping[district_name]
+        
+        # Додаємо кімнати
+        if filters.get("rooms"):
+            rooms_str = str(filters["rooms"])
+            if rooms_str.isdigit():
+                api_params["rooms_in"] = int(rooms_str)
+        
+        # Додаємо стан (ремонт)
+        if filters.get("state"):
+            state = filters["state"].lower()
+            if "ремонт" in state and "під" not in state:
+                api_params["condition_in"] = 7  # Жилая
+            elif "під" in state:
+                api_params["condition_in"] = 6  # Під ремонт
+        
+        # Додаємо бюджет
+        if filters.get("budget"):
+            budget_str = str(filters["budget"])
+            if budget_str.replace('.', '').replace(',', '').isdigit():
+                budget = int(float(budget_str.replace(',', '')))
+                api_params["price_max"] = budget
+        elif filters.get("price_max"):
+            price_max_str = str(filters["price_max"])
+            if price_max_str.replace('.', '').replace(',', '').isdigit():
+                api_params["price_max"] = int(float(price_max_str.replace(',', '')))
+        
+        if filters.get("price_min"):
+            price_min_str = str(filters["price_min"])
+            if price_min_str.replace('.', '').replace(',', '').isdigit():
+                api_params["price_min"] = int(float(price_min_str.replace(',', '')))
+        
+        # Зберігаємо параметри запиту
+        conversation.last_query_params = api_params
+        await session.commit()
+        
+        # Логуємо запит
+        logger.info(f"📞 API REQUEST")
+        logger.info(f"   User: {phone_number} (ID: {user_id})")
+        logger.info(f"   Filters: {json.dumps(filters, ensure_ascii=False)}")
+        logger.info(f"   Params: {json.dumps(api_params, ensure_ascii=False)}")
+        
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                api_response = await client.post(
+                    config.PROPERTY_API_URL,
+                    json=api_params
+                )
+                
+                logger.info(f"   Response: {api_response.status_code}")
+                
+                if api_response.status_code == 200:
+                    data = api_response.json()
+                    
+                    logger.info(f"📊 API Response Data: {json.dumps(data, ensure_ascii=False)[:500]}")
+                    
+                    # Отримуємо дані
+                    items = data.get('items', [])
+                    
+                    # Перевіряємо що items не None
+                    if items is None:
+                        items = []
+                    
+                    # Оновлюємо offset та total_found
+                    if offset_increment:
+                        conversation.offset += 3
+                    else:
+                        conversation.offset = len(items)
+                    
+                    # Для total робимо додатковий запит без limit
+                    count_params = {k: v for k, v in api_params.items() if k != 'limit' and k != 'offset'}
+                    count_params['limit'] = 1000  # Великий ліміт для підрахунку
+                    count_params['offset'] = 0
+                    
+                    count_response = await client.post(config.PROPERTY_API_URL, json=count_params)
+                    if count_response.status_code == 200:
+                        count_data = count_response.json()
+                        count_items = count_data.get('items', [])
+                        total = len(count_items) if count_items else 0
+                        conversation.total_found = total
+                    else:
+                        total = len(items)
+                        conversation.total_found = total
+                    
+                    await session.commit()
+                    
+                    logger.info(f"🏠 Found {len(items)} apartments, total: {total}, offset: {conversation.offset}")
+                    
+                    # Зберігаємо результат API
+                    api_result_msg = MessageHistory(
+                        conversation_id=conversation.id,
+                        user_message="[API REQUEST]",
+                        bot_response=f"Status: 200, Items: {len(items)}, Total: {total}, Offset: {conversation.offset}",
+                        timestamp=datetime.now()
+                    )
+                    session.add(api_result_msg)
+                    await session.commit()
+                    
+                    if items:
+                        # Відправляємо повідомлення про початок
+                        await message.answer(
+                            f"🏠 Відмінно! Я підібрав {len(items)} варіанти для вас:\n\n",
+                            reply_markup=ReplyKeyboardRemove()
+                        )
+                        
+                        # Відправляємо кожен варіант
+                        start_idx = conversation.offset - len(items) + 1
+                        for idx, apt in enumerate(items, start_idx):
+                            await send_apartment(message, apt, idx)
+                        
+                        # В кінці повідомляємо скільки ще є
+                        remaining = total - conversation.offset
+                        if remaining > 0:
+                            await message.answer(
+                                f"📊 Усього в базі знайдено <b>{total}</b> об'єктів за вашим запитом.\n"
+                                f"📁 Ще <b>{remaining}</b> варіантів доступно!\n\n"
+                                f"🔄 Напишіть 'Покажіть ще варіанти' якщо хочете побачити більше.\n"
+                                f"📞 Або 'Хочу на перегляд' для запису до рієлтора.",
+                                parse_mode="HTML"
+                            )
+                    else:
+                        await message.answer(
+                            "😔 На жаль, не знайдено варіантів за вашими параметрами.\n\n"
+                            "📞 Наш менеджер зв'яжеться з вами для уточнення!",
+                            reply_markup=ReplyKeyboardRemove()
+                        )
+                else:
+                    await message.answer(
+                        "❗ Виникла помилка при пошуку. Наш менеджер зв'яжеться з вами.",
+                        reply_markup=ReplyKeyboardRemove()
+                    )
+                
+        except Exception as e:
+            logger.error(f"❌ API error: {e}")
+            
+            # Зберігаємо помилку
+            error_record = MessageHistory(
+                conversation_id=conversation.id,
+                user_message="[API ERROR]",
+                bot_response=f"Error: {str(e)}",
+                timestamp=datetime.now()
+            )
+            session.add(error_record)
+            await session.commit()
+            
+            await message.answer(
+                "❗ Виникла технічна помилка. Наш менеджер зв'яжеться з вами.",
+                reply_markup=ReplyKeyboardRemove()
+            )
+
 @dp.message(F.contact)
 async def handle_contact(message: types.Message):
     """Обробка контакту користувача"""
@@ -295,192 +528,9 @@ async def handle_contact(message: types.Message):
             session.add(message_record)
             
             await session.commit()
-            
-            # Формуємо запит до API
-            filters = conversation.filters or {}
-            
-            # Формуємо параметри для API
-            api_params = {
-                "key": config.PROPERTY_API_KEY,
-                "limit": 3,
-                "offset": 0
-            }
-            
-            # Мапінг районів на ID
-            district_mapping = {
-                "Київський р-н": 5,
-                "Малиновський р-н": 6,
-                "Приморський р-н": 8,
-                "Суворовський р-н": 11
-            }
-            
-            # Мапінг мікрорайонів на ID
-            microarea_mapping = {
-                "Бугаївка": 89,
-                "Дзержинського": 90,
-                "Застава": 91,
-                "Ленпоселок": 92,
-                "Мельниця": 93,
-                "Молдаванка": 94,
-                "Сахарний": 95,
-                "Слободка": 96,
-                "Фонтан": 97,
-                "Фонтанка": 97,
-                "Черемушки": 98,
-                "Аркадія": 99,
-                "Центр": 102,
-                "Пригород": 97,
-                "Шевченко-Французький": 103,
-                "Большевик": 104,
-                "Котовського": 105,
-                "Крива Балка": 106,
-                "Куяльник": 107,
-                "Лузановка": 108,
-                "Нефтяників": 109,
-                "Пересипь": 110,
-                "Шевченко": 112,
-                "Вузовський": 113,
-                "Дача Ковалевського": 114,
-                "Дружний": 115,
-                "Таїрова": 116,
-                "Царське село": 118,
-                "Червоний хутор": 119,
-                "Чорноморка": 121,
-                "Чубаївка": 122
-            }
-            
-            # Додаємо район/мікрорайон
-            if filters.get("district"):
-                district_name = filters["district"]
-                # Перевіряємо чи не вказано "всі райони" чи подібне
-                if district_name.lower() not in ["всі райони", "всі", "будь-який", "неважливо"]:
-                    # Спочатку пробуємо знайти як мікрорайон
-                    if district_name in microarea_mapping:
-                        api_params["microarea_id"] = microarea_mapping[district_name]
-                    # Потім як район
-                    elif district_name in district_mapping:
-                        api_params["district_id"] = district_mapping[district_name]
-            
-            # Додаємо кімнати
-            if filters.get("rooms"):
-                rooms_str = str(filters["rooms"])
-                if rooms_str.isdigit():
-                    api_params["rooms_in"] = int(rooms_str)
-            
-            # Додаємо стан (ремонт)
-            if filters.get("state"):
-                state = filters["state"].lower()
-                if "ремонт" in state and "під" not in state:
-                    api_params["condition_in"] = 7  # Жилая
-                elif "під" in state:
-                    api_params["condition_in"] = 6  # Під ремонт
-            
-            # Додаємо бюджет
-            if filters.get("budget"):
-                budget_str = str(filters["budget"])
-                # Перевіряємо чи це число
-                if budget_str.replace('.', '').replace(',', '').isdigit():
-                    budget = int(float(budget_str.replace(',', '')))
-                    api_params["price_max"] = budget
-            elif filters.get("price_max"):
-                price_max_str = str(filters["price_max"])
-                if price_max_str.replace('.', '').replace(',', '').isdigit():
-                    api_params["price_max"] = int(float(price_max_str.replace(',', '')))
-            
-            if filters.get("price_min"):
-                price_min_str = str(filters["price_min"])
-                if price_min_str.replace('.', '').replace(',', '').isdigit():
-                    api_params["price_min"] = int(float(price_min_str.replace(',', '')))
-            
-            # Логуємо запит
-            logger.info(f"📞 API REQUEST")
-            logger.info(f"   User: {phone_number} (ID: {user_id})")
-            logger.info(f"   Filters: {json.dumps(filters, ensure_ascii=False)}")
-            logger.info(f"   Params: {json.dumps(api_params, ensure_ascii=False)}")
-            
-            try:
-                async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-                    api_response = await client.post(
-                        config.PROPERTY_API_URL,
-                        json=api_params
-                    )
-                    
-                    logger.info(f"   Response: {api_response.status_code}")
-                    
-                    if api_response.status_code == 200:
-                        data = api_response.json()
-                        
-                        logger.info(f"📊 API Response Data: {json.dumps(data, ensure_ascii=False)[:500]}")
-                        
-                        # Отримуємо дані
-                        items = data.get('items', [])
-                        total = len(items)  # API не повертає total, рахуємо самі
-                        
-                        logger.info(f"🏠 Found {len(items)} apartments, total: {total}")
-                        
-                        # Зберігаємо результат API
-                        api_result_msg = MessageHistory(
-                            conversation_id=conversation.id,
-                            user_message="[API REQUEST]",
-                            bot_response=f"Status: 200, Items: {len(items)}, Total: {total}",
-                            timestamp=datetime.now()
-                        )
-                        session.add(api_result_msg)
-                        await session.commit()
-                        
-                        if items:
-                            # Відправляємо повідомлення про початок
-                            await message.answer(
-                                f"🏠 Відмінно! Я підібрав {len(items)} варіанти для вас:\n\n",
-                                reply_markup=ReplyKeyboardRemove()
-                            )
-                            
-                            # Відправляємо кожен варіант
-                            for idx, apt in enumerate(items, 1):
-                                await send_apartment(message, apt, idx)
-                            
-                            # В кінці повідомляємо скільки ще є
-                            remaining = total - len(items)
-                            if remaining > 0:
-                                await message.answer(
-                                    f"📊 Усього в базі знайдено <b>{total}</b> об'єктів за вашим запитом.\n"
-                                    f"📁 Ще <b>{remaining}</b> варіантів доступно!\n\n"
-                                    f"📞 Наш менеджер зв'яжеться з вами найближчим часом!",
-                                    parse_mode="HTML"
-                                )
-                            else:
-                                await message.answer(
-                                    f"📞 Наш менеджер зв'яжеться з вами найближчим часом!"
-                                )
-                        else:
-                            await message.answer(
-                                "😔 На жаль, не знайдено варіантів за вашими параметрами.\n\n"
-                                "📞 Наш менеджер зв'яжеться з вами для уточнення!",
-                                reply_markup=ReplyKeyboardRemove()
-                            )
-                    else:
-                        await message.answer(
-                            "❗ Виникла помилка при пошуку. Наш менеджер зв'яжеться з вами.",
-                            reply_markup=ReplyKeyboardRemove()
-                        )
-                    
-            except Exception as e:
-                logger.error(f"❌ API error: {e}")
-                
-                # Зберігаємо помилку
-                error_record = MessageHistory(
-                    conversation_id=conversation.id,
-                    user_message="[API ERROR]",
-                    bot_response=f"Error: {str(e)}",
-                    timestamp=datetime.now()
-                )
-                session.add(error_record)
-                await session.commit()
-                
-                await message.answer(
-                    "❗ Виникла технічна помилка. Наш менеджер зв'яжеться з вами.",
-                    reply_markup=ReplyKeyboardRemove()
-                )
+    
+    # Використовуємо нову функцію для відправки варіантів
+    await fetch_and_send_apartments(message, user_id)
 
 @dp.message(F.text)
 async def handle_message(message: types.Message):
@@ -518,11 +568,13 @@ async def handle_message(message: types.Message):
     response = await claude_agent.process_message(user_id, user_message)
     
     bot_response = response["response"]
+    action = response.get("action")
     
     logger.info(f"🤖 Bot: {bot_response[:100]}...")
     logger.info(f"📊 Filters: {response.get('filters', {})}")
     logger.info(f"❓ Questions: {response.get('questions_asked', [])}")
     logger.info(f"✅ Ready: {response.get('ready_for_contact', False)}")
+    logger.info(f"🎬 Action: {action}")
     
     # Зберігаємо пару повідомлень
     await save_message_pair(user_id, user_message, bot_response)
@@ -539,6 +591,59 @@ async def handle_message(message: types.Message):
             conversation.updated_at = datetime.now()
             await session.commit()
     
+    # Обробляємо дії користувача
+    if action == "show_more":
+        # Показати ще варіанти
+        await message.answer(bot_response)
+        await fetch_and_send_apartments(message, user_id, offset_increment=True)
+        return
+    
+    elif action == "schedule_viewing":
+        # Запис на перегляд
+        await message.answer(bot_response)
+        
+        # Зберігаємо запис в Google Sheets
+        async with async_session() as session:
+            result = await session.execute(
+                select(Conversation).where(Conversation.user_id == user_id)
+            )
+            conversation = result.scalar_one_or_none()
+            
+            if conversation:
+                user_data = {
+                    'name': conversation.filters.get('name', 'Не вказано'),
+                    'phone': conversation.phone_number or 'Не вказано',
+                    'filters': conversation.filters,
+                    'apartment_info': user_message  # Зберігаємо останнє повідомлення
+                }
+                sheets_service.add_viewing_request(user_data)
+        return
+    
+    elif action == "change_filters":
+        # Зміна параметрів - скидаємо offset
+        async with async_session() as session:
+            result = await session.execute(
+                select(Conversation).where(Conversation.user_id == user_id)
+            )
+            conversation = result.scalar_one_or_none()
+            
+            if conversation:
+                conversation.offset = 0
+                await session.commit()
+        
+        await message.answer(bot_response)
+        
+        # Перевіряємо чи є контакт, якщо є - відправляємо нові варіанти
+        async with async_session() as session:
+            result = await session.execute(
+                select(Conversation).where(Conversation.user_id == user_id)
+            )
+            conversation = result.scalar_one_or_none()
+            
+            if conversation and conversation.phone_number:
+                await fetch_and_send_apartments(message, user_id)
+        return
+    
     # Відправляємо відповідь
     if response.get("ready_for_contact"):
         # Перевіряємо чи вже є контакт
@@ -549,8 +654,9 @@ async def handle_message(message: types.Message):
             conversation = result.scalar_one_or_none()
             
             if conversation and conversation.phone_number:
-                # Контакт вже є - просто відповідаємо
+                # Контакт вже є - відправляємо варіанти
                 await message.answer(bot_response)
+                await fetch_and_send_apartments(message, user_id)
             else:
                 # Контакту немає - показуємо кнопку
                 keyboard = ReplyKeyboardMarkup(
