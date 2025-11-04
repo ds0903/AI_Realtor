@@ -403,19 +403,22 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                     # Отримуємо дані
                     items = data.get('items', [])
 
-                    # Для total робимо додатковий запит без limit
+                    # Для total робимо додатковий запит без offset але з великим limit
                     count_params = {k: v for k, v in api_params.items() if k != 'limit' and k != 'offset'}
-                    count_params['limit'] = 1000  # Великий ліміт для підрахунку
+                    count_params['limit'] = 100  # Зменшений ліміт для стабільності
                     count_params['offset'] = 0
 
                     count_response = await client.post(config.PROPERTY_API_URL, json=count_params)
                     if count_response.status_code == 200:
                         count_data = count_response.json()
-                        total = len(count_data.get('items') or [])
+                        count_items = count_data.get('items') or []
+                        total = len(count_items)
                         conversation.total_found = total
+                        logger.info(f"📊 Count request returned {total} items")
                     else:
                         total = len(items)
                         conversation.total_found = total
+                        logger.warning(f"⚠️ Count request failed, using current items: {total}")
 
                     await session.commit()
 
@@ -447,7 +450,7 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                         await session.commit()
 
                         # Скільки показано і скільки залишилось
-                        shown = conversation.offset
+                        shown = current_offset + len(items)
                         remaining = total - shown
 
                         # Формуємо підсумкове повідомлення
