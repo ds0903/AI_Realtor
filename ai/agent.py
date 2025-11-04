@@ -92,35 +92,17 @@ class ClaudeAgent:
         else:
             messages_history = conversation_record.messages or []
             filters = conversation_record.filters or {}
-            # Аналізуємо які питання вже покриті на основі фільтрів
+            # Аналізуємо які питання вже покриті на основі філтрів
             questions_asked = self._analyze_filters(filters)
         
-        # Якщо це перше повідомлення (/start), задаємо всі питання одразу
-        if user_message == "/start":
-            welcome = sheets_service.get_welcome_messages()
-            questions = sheets_service.get_questions()
-            
-            # Формуємо привітання з всіма питаннями
-            welcome_message = welcome[0] if welcome else "Привіт! Я - ШІ Ріелтор."
-            
-            response_text = f"{welcome_message}\n\nЩоб підібрати ідеальний варіант, дайте відповіді на кілька питань:\n\n"
-            
-            for i, question in enumerate(questions[:6], 1):
-                response_text += f"{i}. {question}\n"
-            
-            response_text += "\nМожете відповісти все одразу або окремо - як вам зручніше! 😊"
-            
-            return {
-                "response": response_text,
-                "filters": {},
-                "questions_asked": [],
-                "ready_for_contact": False
-            }
+        # Отримуємо phone_number з бази
+        phone_number = conversation_record.phone_number if conversation_record else None
         
         context = get_context_prompt(
             messages_history[-10:],
             filters,
-            questions_asked
+            questions_asked,
+            phone_number
         )
         
         try:
@@ -171,13 +153,18 @@ class ClaudeAgent:
             if ai_questions:
                 questions_asked = sorted(list(set(questions_asked + ai_questions)))
             
-            ready_for_contact = len(questions_asked) >= 6 or result.get("ready_for_contact", False)
+            # Перевіряємо чи є контакт в контексті
+            has_phone = conversation_record and conversation_record.phone_number
+            
+            ready_for_contact = len(questions_asked) >= 5 or result.get("ready_for_contact", False)
             
             return {
                 "response": result.get("response", "Вибачте, сталася помилка."),
                 "filters": filters,
                 "questions_asked": questions_asked,
-                "ready_for_contact": ready_for_contact
+                "ready_for_contact": ready_for_contact and not has_phone,
+                "action": result.get("action"),
+                "viewing_variants": result.get("viewing_variants", [])
             }
             
         except Exception as e:

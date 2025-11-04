@@ -44,7 +44,8 @@ class PromptsLoader:
             str: системний промпт
         """
         # Форматуємо списки для промпта
-        welcome_str = '\n'.join(f'- {msg}' for msg in welcome_messages)
+        # Беремо ТІЛЬКИ перше привітання (українське)
+        welcome_str = welcome_messages[0] if welcome_messages else "Вітаю вас!"
         questions_str = '\n'.join(f'{i+1}. {q}' for i, q in enumerate(questions))
         objections_str = ', '.join(objections[:3])
         reactions_str = ', '.join(reactions[:3])
@@ -73,7 +74,7 @@ class PromptsLoader:
             district_synonyms=synonyms_str
         )
     
-    def get_context_prompt(self, conversation_history, filters, questions_asked):
+    def get_context_prompt(self, conversation_history, filters, questions_asked, phone_number=None):
         """
         Генерує контекст для AI на основі історії розмови
         
@@ -81,6 +82,7 @@ class PromptsLoader:
             conversation_history: історія повідомлень
             filters: зібрані фільтри
             questions_asked: задані питання
+            phone_number: номер телефону
         
         Returns:
             str: контекст для промпта
@@ -90,7 +92,8 @@ class PromptsLoader:
         return template.format(
             conversation_history=json.dumps(conversation_history[-10:], ensure_ascii=False, indent=2),
             filters=json.dumps(filters, ensure_ascii=False),
-            questions_asked=questions_asked
+            questions_asked=questions_asked,
+            phone_number=phone_number if phone_number else "None"
         )
     
     def get_contact_request_message(self):
@@ -119,9 +122,9 @@ def get_system_prompt(welcome_messages, questions, objections, reactions, jokes=
     """Отримує системний промпт"""
     return prompts_loader.get_system_prompt(welcome_messages, questions, objections, reactions, jokes, district_synonyms)
 
-def get_context_prompt(conversation_history, filters, questions_asked):
+def get_context_prompt(conversation_history, filters, questions_asked, phone_number=None):
     """Отримує контекст промпт"""
-    return prompts_loader.get_context_prompt(conversation_history, filters, questions_asked)
+    return prompts_loader.get_context_prompt(conversation_history, filters, questions_asked, phone_number)
 
 def get_contact_request_message():
     """Отримує повідомлення запиту контакту"""
