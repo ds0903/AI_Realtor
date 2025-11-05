@@ -78,7 +78,7 @@ async def check_inactive_users():
                     time_diff = (current_time - last_message_time).total_seconds()
 
                     # Якщо користувач мовчить 30+ секунд і ми ще не відправляли silence
-                    if time_diff >= 30 and not silence_sent.get(user_id, False):
+                    if time_diff >= 60 and not silence_sent.get(user_id, False):
                         # Перевіряємо чи користувач в процесі розмови (не отримав контакт)
                         async with async_session() as session:
                             result = await session.execute(
@@ -466,7 +466,7 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                     session.add(api_result_msg)
                     await session.commit()
 
-                    if items:
+                    if items and len(items) > 0:
                         # Зберігаємо повні дані квартир з номерами
                         from sqlalchemy.orm.attributes import flag_modified
                         
@@ -517,9 +517,9 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                                 parse_mode="HTML"
                             )
                     else:
+                        # Немає результатів - повідомляємо користувача
                         await message.answer(
-                            "😔 На жаль, не знайдено варіантів за вашими параметрами.\n\n"
-                            "📞 Наш менеджер зв'яжеться з вами для уточнення!",
+                            "😔 На жаль, за заданими фільтрами я не зміг знайти об'єкт для вас.\n\n",
                             reply_markup=ReplyKeyboardRemove()
                         )
                 else:
