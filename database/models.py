@@ -20,6 +20,7 @@ class Conversation(Base):
     filters = Column(JSON)
     offset = Column(Integer, default=0)  # Для пагінації варіантів
     total_found = Column(Integer, default=0)  # Скільки всього знайдено
+    initial_total = Column(Integer, default=0)  # Початкова кількість результатів (не змінюється)
     last_query_params = Column(JSON)  # Останні параметри запиту
     last_shown_apartments = Column(JSON)  # Останні показані об'єкти
     last_activity = Column(DateTime)  # Час останньої активності (для очищення)

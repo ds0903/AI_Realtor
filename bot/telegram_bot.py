@@ -507,8 +507,7 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                         # Формуємо підсумкове повідомлення
                         if remaining > 0:
                             await message.answer(
-                                f"📊 Показано <b>{shown}</b> з <b>{total}</b> варіантів.\n"
-                                f"Напишіть 'Покажіть ще варіанти' щоб побачити більше.",
+                                f"📊 Показано <b>{shown}</b> з <b>{total}</b> варіантів. Залишилось <b>{remaining}</b>.\n",
                                 parse_mode="HTML"
                             )
                         else:
