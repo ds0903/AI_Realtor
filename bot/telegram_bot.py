@@ -133,6 +133,8 @@ async def save_message_pair(user_id, user_message, bot_response):
             conversation.updated_at = datetime.now()
 
             # Також зберігаємо в JSON для сумісності
+            from sqlalchemy.orm.attributes import flag_modified
+            
             messages = conversation.messages or []
             messages.append({
                 "role": "user",
@@ -145,6 +147,9 @@ async def save_message_pair(user_id, user_message, bot_response):
                 "timestamp": datetime.now().isoformat()
             })
             conversation.messages = messages
+            
+            # Явно позначаємо як змінене для SQLAlchemy
+            flag_modified(conversation, "messages")
 
             await session.commit()
             logger.info(f"💾 Збережено пару повідомлень для user {user_id}")
@@ -487,10 +492,11 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                         await session.commit()
                         
                         # Відправляємо повідомлення про початок
-                        await message.answer(
-                            f"🏠 Відмінно! Я підібрав {len(items)} варіанти для вас:\n\n",
-                            reply_markup=ReplyKeyboardRemove()
-                        )
+                        start_msg = f"🏠 Відмінно! Я підібрав {len(items)} варіанти для вас:\n\n"
+                        await message.answer(start_msg, reply_markup=ReplyKeyboardRemove())
+                        
+                        # Зберігаємо в історію
+                        await save_message_pair(user_id, "[START SHOWING APARTMENTS]", start_msg)
 
                         # Відправляємо кожен варіант (нумерація з current_offset + 1)
                         for idx, apt in enumerate(items, current_offset + 1):
@@ -506,17 +512,23 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
 
                         # Формуємо підсумкове повідомлення
                         if remaining > 0:
-                            await message.answer(
+                            summary_msg = (
                                 f"📊 Показано <b>{shown}</b> з <b>{total}</b> варіантів. Залишилось <b>{remaining}</b>.\n"
-                                f"показати наступні 3 варіанта?",
-                                parse_mode="HTML"
+                                f"показати наступні 3 варіанта?"
                             )
+                            await message.answer(summary_msg, parse_mode="HTML")
+                            
+                            # Зберігаємо це повідомлення в історію щоб AI розумів контекст
+                            await save_message_pair(user_id, "[APARTMENTS SHOWN]", summary_msg)
                         else:
-                            await message.answer(
+                            final_msg = (
                                 f"📊 Показано всі <b>{total}</b> варіанти.\n\n"
-                                f"📞 Наш менеджер зв'яжеться з вами найближчим часом!",
-                                parse_mode="HTML"
+                                f"📞 Наш менеджер зв'яжеться з вами найближчим часом!"
                             )
+                            await message.answer(final_msg, parse_mode="HTML")
+                            
+                            # Зберігаємо фінальне повідомлення
+                            await save_message_pair(user_id, "[ALL APARTMENTS SHOWN]", final_msg)
                     else:
                         # Немає результатів - повідомляємо користувача
                         await message.answer(
@@ -647,8 +659,9 @@ async def handle_message(message: types.Message):
 
     # Обробляємо дії користувача
     if action == "show_more":
-        # Показати ще варіанти
-        await message.answer(bot_response)
+        # Показати ще варіанти - відправляємо повідомлення тільки якщо воно не порожнє
+        if bot_response and bot_response.strip():
+            await message.answer(bot_response)
         await fetch_and_send_apartments(message, user_id, offset_increment=True)
         return
 
