@@ -296,4 +296,100 @@ class GoogleSheetsService:
             traceback.print_exc()
             return False
 
+    def add_manager_call_request(self, user_data):
+        """
+        Додає запит на дзвінок менеджера в Google Sheets лист "CALL_MANAGER"
+        
+        Args:
+            user_data: dict з даними користувача
+                - name: ім'я
+                - phone: телефон
+                - filters: фільтри пошуку
+                - apartments: список останніх переглянутих квартир
+        """
+        from datetime import datetime
+        
+        try:
+            # Шукаємо аркуш CALL_MANAGER, якщо немає - створюємо
+            try:
+                worksheet = self.sheet.worksheet("CALL_MANAGER")
+            except:
+                # Створюємо новий аркуш
+                worksheet = self.sheet.add_worksheet(title="CALL_MANAGER", rows="1000", cols="20")
+                # Додаємо заголовки
+                worksheet.append_row([
+                    "Дата/Час", "Ім'я", "Телефон", 
+                    "ID об'єкта", "Адреса", "Кімнат", "Площа", "Поверх", "Ціна $",
+                    "Район", "Стан", "Бюджет"
+                ])
+            
+            # Дані користувача
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            name = user_data.get('name', 'Не вказано')
+            phone = user_data.get('phone', 'Не вказано')
+            
+            # Дані з фільтрів
+            filters = user_data.get('filters', {})
+            district = filters.get('district', '')
+            state = filters.get('state', '')
+            budget = filters.get('budget', '')
+            
+            # Останні переглянуті квартири
+            apartments = user_data.get('apartments', [])
+            
+            if not apartments:
+                # Якщо немає квартир - записуємо тільки контакт та фільтри
+                row = [
+                    now, name, phone,
+                    '', '', '', '', '', '',
+                    district, state, budget
+                ]
+                worksheet.append_row(row)
+                print(f"✅ Додано запит менеджера для {name} ({phone})")
+                return True
+            
+            # Додаємо рядок для кожної квартири
+            for apt in apartments:
+                # Витягуємо дані з API структури
+                object_id = apt.get('id', '')
+                
+                # Адреса
+                address_obj = apt.get('address', {})
+                if isinstance(address_obj, dict):
+                    street_type = address_obj.get('street_type', '')
+                    street = address_obj.get('street', '')
+                    house = address_obj.get('house_number', '')
+                    address = f"{street_type} {street}, {house}".strip()
+                else:
+                    address = ''
+                
+                # Інші дані
+                rooms = apt.get('rooms', '')
+                area = apt.get('area_total', '')
+                floor = apt.get('floor', '')
+                floors_total = apt.get('floors_total', '')
+                floor_str = f"{floor}/{floors_total}" if floor and floors_total else str(floor)
+                
+                # Ціна
+                prices_obj = apt.get('prices', {})
+                price = prices_obj.get('value', '') if isinstance(prices_obj, dict) else ''
+                
+                # Формуємо рядок
+                row = [
+                    now, name, phone,
+                    object_id, address, rooms, area, floor_str, price,
+                    district, state, budget
+                ]
+                
+                worksheet.append_row(row)
+                print(f"✅ Додано запит менеджера для {name} ({phone}) - об'єкт ID: {object_id}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error adding manager call request: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
 sheets_service = GoogleSheetsService()

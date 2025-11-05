@@ -721,6 +721,45 @@ async def handle_message(message: types.Message):
                         "✅ Ваш запит прийнято!\n\n"
                     )
         return
+    
+    elif action == "call_manager":
+        # Виклик менеджера
+        async with async_session() as session:
+            result = await session.execute(
+                select(Conversation).where(Conversation.user_id == user_id)
+            )
+            conversation = result.scalar_one_or_none()
+
+            if conversation:
+                # Отримуємо останні переглянуті квартири
+                apartments_map = conversation.last_shown_apartments or {}
+                last_apartments = list(apartments_map.values()) if apartments_map else []
+                
+                # Формуємо дані для Google Sheets
+                user_data = {
+                    'name': conversation.filters.get('name', 'Не вказано'),
+                    'phone': conversation.phone_number or 'Не вказано',
+                    'filters': conversation.filters,
+                    'apartments': last_apartments  # Останні переглянуті квартири
+                }
+                
+                try:
+                    sheets_service.add_manager_call_request(user_data)
+                    
+                    # Відповідь користувачу
+                    if bot_response:
+                        await message.answer(bot_response)
+                    else:
+                        await message.answer(
+                            "📞 Дякую! Наш менеджер зв'яжеться з вами найближчим часом."
+                        )
+                    logger.info(f"✅ Запит менеджера від user {user_id}")
+                except Exception as e:
+                    logger.error(f"❌ Помилка запису в Google Sheets: {e}")
+                    await message.answer(
+                        "✅ Ваш запит прийнято!\n\n"
+                    )
+        return
 
     elif action == "change_filters":
         # Зміна параметрів - скидаємо offset
