@@ -220,6 +220,16 @@ class GoogleSheetsService:
         """
         from datetime import datetime
         
+        # Маппінг condition кодів на текст
+        condition_mapping = {
+            6: "під відділку",
+            7: "жила",
+            8: "євроремонт",
+            9: "від будівельників",
+            14: "капітальний",
+            18: "під ремонт"
+        }
+        
         try:
             # Шукаємо аркуш offer, якщо немає - створюємо
             try:
@@ -242,7 +252,14 @@ class GoogleSheetsService:
             # Дані з фільтрів
             filters = user_data.get('filters', {})
             district = filters.get('district', '')
-            state = filters.get('state', '')
+            
+            # Стан ремонту - беремо з condition і конвертуємо в текст
+            condition_code = filters.get('condition')
+            if condition_code and isinstance(condition_code, int):
+                state = condition_mapping.get(condition_code, f"код {condition_code}")
+            else:
+                state = filters.get('state', '')  # Fallback на старе поле
+            
             budget = filters.get('budget', '')
             
             # Обрані квартири
@@ -286,7 +303,7 @@ class GoogleSheetsService:
                 ]
                 
                 worksheet.append_row(row)
-                print(f"✅ Додано запис на перегляд для {name} ({phone}) - об'єкт ID: {object_id}")
+                print(f"✅ Додано запис на перегляд для {name} ({phone}) - об'єкт ID: {object_id}, стан: {state}")
             
             return True
             
@@ -308,6 +325,16 @@ class GoogleSheetsService:
                 - apartments: список останніх переглянутих квартир
         """
         from datetime import datetime
+        
+        # Маппінг condition кодів на текст
+        condition_mapping = {
+            6: "під відділку",
+            7: "жила",
+            8: "євроремонт",
+            9: "від будівельників",
+            14: "капітальний",
+            18: "під ремонт"
+        }
         
         try:
             # Шукаємо аркуш CALL_MANAGER, якщо немає - створюємо
@@ -331,7 +358,14 @@ class GoogleSheetsService:
             # Дані з фільтрів
             filters = user_data.get('filters', {})
             district = filters.get('district', '')
-            state = filters.get('state', '')
+            
+            # Стан ремонту - беремо з condition і конвертуємо в текст
+            condition_code = filters.get('condition')
+            if condition_code and isinstance(condition_code, int):
+                state = condition_mapping.get(condition_code, f"код {condition_code}")
+            else:
+                state = filters.get('state', '')  # Fallback на старе поле
+            
             budget = filters.get('budget', '')
             
             # Останні переглянуті квартири
@@ -345,7 +379,7 @@ class GoogleSheetsService:
                     district, state, budget
                 ]
                 worksheet.append_row(row)
-                print(f"✅ Додано запит менеджера для {name} ({phone})")
+                print(f"✅ Додано запит менеджера для {name} ({phone}), стан: {state}")
                 return True
             
             # Додаємо рядок для кожної квартири
@@ -382,7 +416,7 @@ class GoogleSheetsService:
                 ]
                 
                 worksheet.append_row(row)
-                print(f"✅ Додано запит менеджера для {name} ({phone}) - об'єкт ID: {object_id}")
+                print(f"✅ Додано запит менеджера для {name} ({phone}) - об'єкт ID: {object_id}, стан: {state}")
             
             return True
             
