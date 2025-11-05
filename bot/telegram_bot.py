@@ -389,22 +389,15 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
             if rooms_str.isdigit():
                 api_params["rooms_in"] = int(rooms_str)
 
-        # Додаємо стан (ремонт) - КРИТИЧНО!
-        if filters.get("state"):
-            state = filters["state"].lower()
-            
-            # З ремонтом: 7 (Жилая), 8 (Евроремонт), 14 (Капитальный)
-            if ("з ремонт" in state or "жил" in state or 
-                "євро" in state or "капіталь" in state):
-                # З ремонтом - беремо найпопулярніший варіант
-                api_params["condition_in"] = 7  # Жилая (найпопулярніше)
-            
-            # Без ремонту: 6 (Под отделку), 9 (От строителей), 18 (Под ремонт)
-            elif ("без ремонт" in state or "під ремонт" in state or 
-                  "під себе" in state or "від будів" in state or
-                  "под отдел" in state):
-                # Без ремонту - беремо найпопулярніший варіант
-                api_params["condition_in"] = 6  # Под отделку (найпопулярніше)
+        # Додаємо стан (ремонт) - отримуємо з AI автоматично
+        if filters.get("condition"):
+            # AI вже визначило правильний код, просто передаємо його
+            condition = filters["condition"]
+            if isinstance(condition, int) and condition in [6, 7, 8, 9, 14, 18]:
+                api_params["condition_in"] = condition
+                logger.info(f"🏠 Condition: {condition}")
+            else:
+                logger.warning(f"⚠️ Невалідний condition: {condition}")
 
         # Додаємо бюджет
         if filters.get("budget"):

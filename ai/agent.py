@@ -58,7 +58,7 @@ class ClaudeAgent:
         if filters.get("rooms"):
             covered.append(4)
         
-        if filters.get("state") or filters.get("renovation"):
+        if filters.get("condition") or filters.get("state") or filters.get("renovation"):
             covered.append(5)
         
         if filters.get("budget") or filters.get("price_min") or filters.get("price_max"):
