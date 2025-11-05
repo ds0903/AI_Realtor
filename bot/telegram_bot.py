@@ -46,17 +46,17 @@ async def clean_old_apartments():
                         Conversation.last_activity.isnot(None)
                     )
                 )
-                conversations = result.scalars().all()
-                
-                for conversation in conversations:
-                    time_diff = (current_time - conversation.last_activity).total_seconds()
-                    
-                    # Якщо неактивність більше 5 хв (300 сек)
-                    if time_diff > 300:
-                        conversation.last_shown_apartments = {}
-                        conversation.last_activity = None
-                        await session.commit()
-                        logger.info(f"🧹 Очищено кеш квартир для user {conversation.user_id}")
+                # conversations = result.scalars().all()
+                #
+                # for conversation in conversations:
+                #     time_diff = (current_time - conversation.last_activity).total_seconds()
+                #
+                #     # Якщо неактивність більше 5 хв (300 сек)
+                #     if time_diff > 300:
+                #         conversation.last_shown_apartments = {}
+                #         conversation.last_activity = None
+                #         await session.commit()
+                #         logger.info(f"🧹 Очищено кеш квартир для user {conversation.user_id}")
                         
         except Exception as e:
             logger.error(f"❌ Error in clean_old_apartments: {e}")
@@ -523,7 +523,6 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                         else:
                             final_msg = (
                                 f"📊 Показано всі <b>{total}</b> варіанти.\n\n"
-                                f"📞 Наш менеджер зв'яжеться з вами найближчим часом!"
                             )
                             await message.answer(final_msg, parse_mode="HTML")
                             
@@ -537,7 +536,7 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
                         )
                 else:
                     await message.answer(
-                        "❗ Виникла помилка при пошуку. Наш менеджер зв'яжеться з вами.",
+                        "❗ Виникла помилка при пошуку.",
                         reply_markup=ReplyKeyboardRemove()
                     )
 
@@ -555,7 +554,7 @@ async def fetch_and_send_apartments(message: types.Message, user_id: int, offset
             await session.commit()
 
             await message.answer(
-                "❗ Виникла технічна помилка. Наш менеджер зв'яжеться з вами.",
+                "❗ Виникла технічна помилка.",
                 reply_markup=ReplyKeyboardRemove()
             )
 
@@ -712,14 +711,12 @@ async def handle_message(message: types.Message):
                         variants_text = f"варіанти {', '.join(variant_numbers)}" if variant_numbers else "обрані варіанти"
                         await message.answer(
                             f"✅ Чудово! Записав вас на перегляд: {variants_text}\n\n"
-                            f"📞 Наш менеджер зв'яжеться з вами найближчим часом для узгодження часу перегляду!"
                         )
                     logger.info(f"✅ Записано на перегляд: user {user_id}, варіанти {variant_numbers}")
                 except Exception as e:
                     logger.error(f"❌ Помилка запису в Google Sheets: {e}")
                     await message.answer(
                         "✅ Ваш запит прийнято!\n\n"
-                        "📞 Наш менеджер зв'яжеться з вами найближчим часом!"
                     )
         return
 
