@@ -65,15 +65,15 @@ async def sendpulse_webhook(request: Request):
         
         logger.info(f"🤖 AI відповідь: {bot_text[:200]}")
         
-        # Відправляємо через Telegram Bot API
-        if bot_text and contact_id:
-            success = await sendpulse_client.send_telegram_message(contact_id, bot_text)
-            if success:
-                logger.info(f"✅ Повідомлення відправлено")
-            else:
-                logger.error(f"❌ Не вдалося відправити")
-        
-        return JSONResponse({"status": "ok"})
+        # Повертаємо відповідь у форматі SendPulse - він сам надішле в чат!
+        return JSONResponse({
+            "commands": [
+                {
+                    "command": "sendText",
+                    "text": bot_text
+                }
+            ]
+        })
         
     except Exception as e:
         logger.error(f"❌ Помилка вебхука: {e}", exc_info=True)
