@@ -65,14 +65,9 @@ async def sendpulse_webhook(request: Request):
         
         logger.info(f"🤖 AI відповідь: {bot_text[:200]}")
         
-        # Повертаємо відповідь у форматі SendPulse - він сам надішле в чат!
+        # Повертаємо відповідь у JSON - SendPulse обробить змінну gpt_response
         return JSONResponse({
-            "commands": [
-                {
-                    "command": "sendText",
-                    "text": bot_text
-                }
-            ]
+            "gpt_response": bot_text
         })
         
     except Exception as e:
@@ -86,24 +81,26 @@ async def start_api(request: Request):
         data = await request.json()
         logger.info(f"📥 SendPulse API запит: {data}")
         
-        command = data.get("command")
-        user_id = data.get("user_id")
-        user_name = data.get("user_name")
+        # Отримуємо текст від користувача
+        text = data.get("text") or data.get("message") or data.get("command", "")
+        user_id = data.get("user_id") or data.get("contact_id") or "unknown"
+        user_name = data.get("user_name") or data.get("name", "")
         
-        if not user_id:
-            return JSONResponse({"response": "Помилка: немає user_id"}, status_code=400)
+        logger.info(f"📱 User: {user_id}, Text: {text}")
+        
+        if not text:
+            return {"response": "Помилка: немає тексту"}
         
         # Конвертуємо user_id в int
         try:
-            user_id = int(user_id) if isinstance(user_id, str) else user_id
+            user_id = int(user_id) if isinstance(user_id, str) and user_id.isdigit() else hash(str(user_id))
         except:
             user_id = hash(str(user_id))
         
-        # Обробка команди
-        if command == "start" or command == "/start":
+        # Обробка: якщо текст = "start" - привітання, інакше - звичайна розмова
+        if text.strip().lower() in ["/start", "start", "старт", "привіт", "hi", "hello"]:
             ai_response = await MessageHandler.process_start_command(user_id, user_name)
         else:
-            text = data.get("text", command)
             ai_response = await MessageHandler.process_text_message(user_id, text, user_name)
         
         bot_text = ai_response.get("response", "Помилка обробки")
