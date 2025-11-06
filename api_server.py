@@ -27,52 +27,51 @@ async def sendpulse_webhook(request: Request):
         data = await request.json()
         logger.info(f"📥 SendPulse webhook: {data}")
         
-        # SendPulse надсилає дані в різних форматах, обробляємо обидва
-        # Формат 1: вкладений в "data"
-        if "data" in data:
-            message_data = data.get("data", {})
-        else:
-            # Формат 2: прямо в root
-            message_data = data
+        # SendPulse надсилає СПИСОК подій!
+        if isinstance(data, list):
+            data = data[0] if len(data) > 0 else {}
         
-        # Витягуємо інформацію
-        contact = message_data.get("contact", {})
-        message = message_data.get("message", {})
+        # Витягуємо дані з Telegram структури
+        info = data.get("info", {})
+        contact_data = data.get("contact", {})
         
-        # Отримуємо phone/contact_id
-        phone = contact.get("phone") or contact.get("id")
-        contact_id = contact.get("id")
-        name = contact.get("name", "")
+        # Отримуємо дані контакту
+        contact_id = contact_data.get("telegram_id") or contact_data.get("id")
+        contact_name = contact_data.get("name", "")
+        username = contact_data.get("username", "")
         
         # Отримуємо текст повідомлення
-        text = message.get("text") or message_data.get("text") or data.get("text")
+        message_info = info.get("message", {})
+        channel_data = message_info.get("channel_data", {})
+        message = channel_data.get("message", {})
+        text = message.get("text", "")
         
-        logger.info(f"📱 Phone: {phone}, Contact: {contact_id}, Text: {text}")
+        logger.info(f"📱 Contact: {contact_id}, Name: {contact_name}, Text: {text}")
         
         if not text:
             logger.error("❌ Немає тексту в повідомленні")
             return JSONResponse({"status": "error", "message": "No text"}, status_code=400)
         
         # Використовуємо contact_id як user_id
-        user_id = int(contact_id) if contact_id and str(contact_id).isdigit() else hash(phone or "unknown")
+        user_id = int(contact_id) if contact_id and str(contact_id).isdigit() else hash(username or "unknown")
         
         # Обробляємо повідомлення
         if text.strip().lower() in ["/start", "start", "старт", "привіт", "hi", "hello"]:
-            response = await MessageHandler.process_start_command(user_id, name or phone)
+            response = await MessageHandler.process_start_command(user_id, contact_name or username)
         else:
-            response = await MessageHandler.process_text_message(user_id, text, name or phone)
+            response = await MessageHandler.process_text_message(user_id, text, contact_name or username)
         
         bot_text = response.get("response", "")
         
         logger.info(f"🤖 AI відповідь: {bot_text[:200]}")
         
         # Відправляємо через SendPulse API
-        if bot_text and phone:
-            success = await sendpulse_client.send_message(phone, bot_text)
+        if bot_text and contact_id:
+            success = await sendpulse_client.send_telegram_message(contact_id, bot_text)
             if success:
-                logger.info(f"✅ Повідомлення відправлено на {phone}")
+                logger.info(f"✅ Повідомлення відправлено в Telegram chat {contact_id}")
             else:
-                logger.error(f"❌ Не вдалося відправити на {phone}")
+                logger.error(f"❌ Не вдалося відправити в Telegram chat {contact_id}")
         
         return JSONResponse({"status": "ok"})
         
