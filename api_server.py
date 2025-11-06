@@ -27,45 +27,57 @@ async def sendpulse_webhook(request: Request):
         data = await request.json()
         logger.info(f"📥 SendPulse webhook: {data}")
         
-        # Витягуємо дані з вебхука
-        message_data = data.get("data", {})
-        phone = message_data.get("phone")
-        text = message_data.get("text")
-        contact_id = message_data.get("contact_id")
+        # SendPulse надсилає дані в різних форматах, обробляємо обидва
+        # Формат 1: вкладений в "data"
+        if "data" in data:
+            message_data = data.get("data", {})
+        else:
+            # Формат 2: прямо в root
+            message_data = data
         
-        if not phone or not text:
-            return JSONResponse({"status": "error", "message": "Missing data"}, status_code=400)
+        # Витягуємо інформацію
+        contact = message_data.get("contact", {})
+        message = message_data.get("message", {})
         
-        # Використовуємо phone як user_id (або contact_id)
-        user_id = int(contact_id) if contact_id else hash(phone)
+        # Отримуємо phone/contact_id
+        phone = contact.get("phone") or contact.get("id")
+        contact_id = contact.get("id")
+        name = contact.get("name", "")
+        
+        # Отримуємо текст повідомлення
+        text = message.get("text") or message_data.get("text") or data.get("text")
+        
+        logger.info(f"📱 Phone: {phone}, Contact: {contact_id}, Text: {text}")
+        
+        if not text:
+            logger.error("❌ Немає тексту в повідомленні")
+            return JSONResponse({"status": "error", "message": "No text"}, status_code=400)
+        
+        # Використовуємо contact_id як user_id
+        user_id = int(contact_id) if contact_id and str(contact_id).isdigit() else hash(phone or "unknown")
         
         # Обробляємо повідомлення
-        if text.strip().lower() in ["/start", "start", "старт"]:
-            response = await MessageHandler.process_start_command(user_id, phone)
+        if text.strip().lower() in ["/start", "start", "старт", "привіт", "hi", "hello"]:
+            response = await MessageHandler.process_start_command(user_id, name or phone)
         else:
-            response = await MessageHandler.process_text_message(user_id, text, phone)
+            response = await MessageHandler.process_text_message(user_id, text, name or phone)
         
-        # Відправляємо відповідь через SendPulse
         bot_text = response.get("response", "")
-        if bot_text:
-            await sendpulse_client.send_message(phone, bot_text)
         
-        # Обробка actions
-        action = response.get("action")
-        if action == "show_more":
-            # TODO: відправка квартир
-            pass
-        elif action == "schedule_viewing":
-            # TODO: запис на перегляд
-            pass
-        elif action == "call_manager":
-            # TODO: виклик менеджера
-            pass
+        logger.info(f"🤖 AI відповідь: {bot_text[:200]}")
+        
+        # Відправляємо через SendPulse API
+        if bot_text and phone:
+            success = await sendpulse_client.send_message(phone, bot_text)
+            if success:
+                logger.info(f"✅ Повідомлення відправлено на {phone}")
+            else:
+                logger.error(f"❌ Не вдалося відправити на {phone}")
         
         return JSONResponse({"status": "ok"})
         
     except Exception as e:
-        logger.error(f"❌ Помилка обробки вебхука: {e}")
+        logger.error(f"❌ Помилка вебхука: {e}", exc_info=True)
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 @app.post("/start")
