@@ -53,11 +53,27 @@ class SendPulseClient:
             )
             
             if response.status_code == 200:
-                bots = response.json()
-                if bots and len(bots) > 0:
-                    self.bot_id = bots[0].get("id")
+                data = response.json()
+                logger.info(f"🔍 API відповідь bots: {data}")
+                
+                # Перевіряємо чи це список
+                if isinstance(data, list) and len(data) > 0:
+                    self.bot_id = data[0].get("id")
+                # Або словник з data
+                elif isinstance(data, dict) and "data" in data:
+                    bots_list = data.get("data", [])
+                    if bots_list and len(bots_list) > 0:
+                        self.bot_id = bots_list[0].get("id")
+                # Або прямо словник з id
+                elif isinstance(data, dict) and "id" in data:
+                    self.bot_id = data.get("id")
+                
+                if self.bot_id:
                     logger.info(f"✅ Bot ID: {self.bot_id}")
                     return True
+                else:
+                    logger.error("❌ Bot ID не знайдено в відповіді")
+                    return False
             else:
                 logger.error(f"❌ Помилка отримання bot ID: {response.text}")
                 return False
