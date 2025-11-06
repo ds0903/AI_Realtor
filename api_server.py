@@ -68,6 +68,44 @@ async def sendpulse_webhook(request: Request):
         logger.error(f"❌ Помилка обробки вебхука: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
+@app.post("/start")
+async def start_api(request: Request):
+    """Обробка API запиту від SendPulse (для блоку 'Запит API')"""
+    try:
+        data = await request.json()
+        logger.info(f"📥 SendPulse API запит: {data}")
+        
+        command = data.get("command")
+        user_id = data.get("user_id")
+        user_name = data.get("user_name")
+        
+        if not user_id:
+            return JSONResponse({"response": "Помилка: немає user_id"}, status_code=400)
+        
+        # Конвертуємо user_id в int
+        try:
+            user_id = int(user_id) if isinstance(user_id, str) else user_id
+        except:
+            user_id = hash(str(user_id))
+        
+        # Обробка команди
+        if command == "start" or command == "/start":
+            ai_response = await MessageHandler.process_start_command(user_id, user_name)
+        else:
+            text = data.get("text", command)
+            ai_response = await MessageHandler.process_text_message(user_id, text, user_name)
+        
+        bot_text = ai_response.get("response", "Помилка обробки")
+        
+        logger.info(f"🤖 AI відповідь: {bot_text[:100]}")
+        
+        # Повертаємо ТІЛЬКИ response як просту строку в JSON
+        return {"response": bot_text}
+        
+    except Exception as e:
+        logger.error(f"❌ Помилка API: {e}")
+        return {"response": f"Помилка: {str(e)}"}
+
 @app.get("/health")
 async def health():
     """Перевірка здоров'я сервера"""
